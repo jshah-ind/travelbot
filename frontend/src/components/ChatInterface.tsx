@@ -107,6 +107,12 @@ const ChatInterface: React.FC = () => {
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
 
+    // ✅ AUTHENTICATION CHECK: Prevent sending without login
+    if (!isAuthenticated) {
+      alert('Please sign up or login to search for flights. Authentication is required for all queries.');
+      return;
+    }
+
     // ✅ NEW: Check for month search before sending
     const monthDetection = detectMonthSearch(inputValue);
 
@@ -256,7 +262,7 @@ const ChatInterface: React.FC = () => {
             <div className="mt-3 space-y-2 ml-11">
               <p className="text-sm font-medium text-gray-600">Suggestions:</p>
               <div className="flex flex-wrap gap-2">
-                {message.suggestions.map((suggestion, index) => (
+                {message.suggestions.map((suggestion: string, index: number) => (
                   <button
                     key={index}
                     onClick={() => handleQuickAction(suggestion)}
@@ -316,15 +322,21 @@ const ChatInterface: React.FC = () => {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask me about flights, hotels, or travel planning..."
-            className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            placeholder={isAuthenticated ? "Ask me about flights, hotels, or travel planning..." : "Please sign up or login to search for flights..."}
+            disabled={!isAuthenticated}
+            className={`flex-1 border rounded-lg px-4 py-2 resize-none ${
+              isAuthenticated 
+                ? "border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
+                : "border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed"
+            }`}
             rows={1}
             style={{ minHeight: '40px', maxHeight: '120px' }}
           />
           <button
             onClick={handleSendMessage}
-            disabled={isLoading || !inputValue.trim()}
+            disabled={!isAuthenticated || isLoading || !inputValue.trim()}
             className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title={!isAuthenticated ? "Please sign up or login to send messages" : "Send message"}
           >
             <Send size={20} />
           </button>

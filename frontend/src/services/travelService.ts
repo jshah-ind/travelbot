@@ -79,6 +79,11 @@ export const travelService = {
         const user = authService.getUser();
         const isAuthenticated = authService.isAuthenticated();
 
+        // AUTHENTICATION IS NOW REQUIRED
+        if (!isAuthenticated) {
+          throw new Error('Authentication required. Please sign up or login to search for flights.');
+        }
+
         // Prepare search payload for our simple backend
         const searchPayload = {
           query: query.trim()
@@ -86,15 +91,12 @@ export const travelService = {
 
         console.log('📤 Calling simple backend /search endpoint with payload:', searchPayload);
 
-        // Prepare headers with authentication if available
+        // Prepare headers with authentication (now required)
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          ...authService.getAuthHeaders()
         };
-
-        if (isAuthenticated) {
-          Object.assign(headers, authService.getAuthHeaders());
-        }
 
         const searchResponse = await Promise.race([
           fetch('http://localhost:8000/search', {
@@ -145,9 +147,11 @@ export const travelService = {
     } catch (error) {
       console.error('💥 Unexpected error in searchFlightsNaturalLanguage:', error);
       
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
       return {
         status: 'error',
-        error: `Unexpected error: ${error.message}`,
+        error: `Unexpected error: ${errorMessage}`,
         suggestions: [
           'Check your network connection',
           'Ensure API server is running',
@@ -229,8 +233,9 @@ export const travelService = {
       
     } catch (error) {
       console.error('🔴 Server connection test failed:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
-        error: error.message,
+        error: errorMessage,
         suggestion: 'Server may not be running on port 8000'
       };
     }

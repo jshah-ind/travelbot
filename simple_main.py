@@ -156,11 +156,14 @@ def simple_extract_flight_params(query: str) -> dict:
 
     query_lower = query.lower()
 
-    # City mappings
+    # City mappings (including common misspellings)
     city_map = {
-        'delhi': 'DEL', 'mumbai': 'BOM', 'bangalore': 'BLR', 'chennai': 'MAA',
-        'kolkata': 'CCU', 'hyderabad': 'HYD', 'pune': 'PNQ', 'ahmedabad': 'AMD',
-        'kochi': 'COK', 'goa': 'GOI'
+        'delhi': 'DEL', 'deli': 'DEL', 'dehli': 'DEL',  # Delhi misspellings
+        'mumbai': 'BOM', 'mumbay': 'BOM', 'bombay': 'BOM',  # Mumbai misspellings
+        'bangalore': 'BLR', 'bangalor': 'BLR', 'banglore': 'BLR',  # Bangalore misspellings
+        'chennai': 'MAA', 'chenai': 'MAA', 'channai': 'MAA',  # Chennai misspellings
+        'kochi': 'COK', 'cochin': 'COK',  # Kochi misspellings
+        'kolkata': 'CCU', 'hyderabad': 'HYD', 'pune': 'PNQ', 'ahmedabad': 'AMD', 'goa': 'GOI'
     }
 
     # Extract cities
@@ -194,9 +197,12 @@ def simple_extract_flight_params(query: str) -> dict:
             origin = found_cities[0]
             destination = 'BOM'  # Default to Mumbai
 
-    # Extract date
+    # Extract date (with spelling mistake handling)
     departure_date = None
-    if 'tomorrow' in query_lower:
+    
+    # Handle "tomorrow" and common misspellings
+    tomorrow_variants = ['tomorrow', 'tommorow', 'tomorow', 'tommorrow', 'tomorrrow', 'tomarow']
+    if any(variant in query_lower for variant in tomorrow_variants):
         departure_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
     elif 'today' in query_lower:
         departure_date = datetime.now().strftime('%Y-%m-%d')
@@ -259,41 +265,43 @@ def simple_extract_flight_params(query: str) -> dict:
 @app.get("/api")
 async def api_root():
     """API health check endpoint"""
-    return {"message": "Simple Travel Agent API", "status": "running"}
+    return {
+        "message": "Simple Travel Agent API", 
+        "status": "running",
+        "authentication_required": True,
+        "note": "All flight search queries require user authentication. Please sign up or login first."
+    }
 
 @app.post("/search", response_model=FlightSearchResponse)
 async def search_flights(
     request: FlightSearchRequest,
-    current_user: User = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Single endpoint for both initial and follow-up flight searches
     Uses OpenAI to understand natural language queries and conversation memory
-    Supports both authenticated and guest users
+    REQUIRES USER AUTHENTICATION - Users must sign up/login before querying
     """
     try:
-        logger.info(f"🔍 Processing query: {request.query}")
+        logger.info(f"🔍 Processing query: {request.query} for user: {current_user.email}")
 
-        # Use user ID if authenticated, otherwise use a guest identifier
-        user_id = str(current_user.id) if current_user else "guest_user"
+        # Use authenticated user ID (authentication is now required)
+        user_id = str(current_user.id)
 
-        # Extract flight parameters - using simple extraction due to OpenAI quota issues
-        logger.info("🔄 Using simple parameter extraction (OpenAI quota exceeded)")
-        params = simple_extract_flight_params(request.query)
-        logger.info(f"📋 Simple extracted params: {params}")
-
-        # Temporarily disable OpenAI due to quota issues
-        # try:
-        #     params = await openai_handler.extract_flight_params(
-        #         request.query,
-        #         user_id=user_id,
-        #         db=db
-        #     )
-        # except Exception as openai_error:
-        #     logger.warning(f"⚠️ OpenAI failed (quota/billing issue), using simple extraction: {openai_error}")
-        #     params = simple_extract_flight_params(request.query)
-        #     logger.info(f"📋 Fallback extracted params: {params}")
+        # Extract flight parameters using OpenAI with spelling mistake handling
+        try:
+            logger.info("🤖 Using OpenAI for intelligent parameter extraction with spelling correction")
+            params = await openai_handler.extract_flight_params(
+                request.query,
+                user_id=user_id,
+                db=db
+            )
+            logger.info(f"📋 OpenAI extracted params: {params}")
+        except Exception as openai_error:
+            logger.warning(f"⚠️ OpenAI failed, using simple extraction fallback: {openai_error}")
+            params = simple_extract_flight_params(request.query)
+            logger.info(f"📋 Fallback extracted params: {params}")
 
         # Handle errors from parameter extraction
         if "error" in params:
@@ -320,8 +328,8 @@ async def search_flights(
         # Search flights
         result = await travel_agent.search_flights(params)
 
-        # Store conversation context if this was a successful flight search
-        if result["status"] == "success" and not params.get("error"):
+        # Store conversation context if parameter extraction was successful (regardless of Amadeus API result)
+        if not params.get("error"):
             openai_handler.conversation_memory.store_flight_search(
                 user_id=user_id,
                 search_params=params,

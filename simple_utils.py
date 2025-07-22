@@ -167,27 +167,44 @@ class ConversationMemory:
         if not last_search:
             return None
 
-        # Database contexts already handle expiration, so no need to check time here
+        # 🔧 FIX: If query has complete route information (origin + destination), treat as new query
+        # This prevents over-aggressive follow-up detection for queries like "book 2 business class tickets from Mumbai to Goa"
+        if self._has_complete_route_info(query_lower):
+            self.logger.info(f"🔄 Query has complete route info, treating as new query (not follow-up)")
+            return None
 
         # Detect follow-up patterns
         follow_up_patterns = {
             # Class changes
             "business_class": [
                 "business class", "business", "show business", "business flights",
-                "premium", "upgrade", "first class", "economy plus"
+                "premium", "upgrade", "first class", "economy plus",
+                "change to business", "make it business"
             ],
             "economy_class": [
-                "economy", "economy class", "show economy", "cheaper", "budget"
+                "economy", "economy class", "show economy", "cheaper", "budget",
+                "change to economy", "make it economy", "economy instead"
             ],
             # Date modifications
             "different_date": [
                 "different date", "another date", "other dates", "next day",
                 "day before", "earlier", "later", "weekend"
             ],
-            # Passenger changes
+            # Passenger changes - IMPROVED
             "more_passengers": [
                 "2 passengers", "3 passengers", "4 passengers", "family",
-                "add passenger", "more people"
+                "add passenger", "more people", "add one more passenger",
+                "one more person", "add another passenger", "more passenger",
+                "add one more", "one more traveler"
+            ],
+            # Route changes - NEW
+            "destination_change": [
+                "change destination to", "destination to", "go to", "fly to",
+                "change to", "instead of"
+            ],
+            "origin_change": [
+                "change origin to", "origin to", "from", "start from",
+                "depart from", "leave from"
             ],
             # General modifications
             "show_more": [
@@ -275,6 +292,66 @@ class ConversationMemory:
         has_date_patterns = any(re.search(pattern, query_lower, re.IGNORECASE) for pattern in date_patterns)
 
         return has_date_keywords or has_date_patterns
+
+    def _has_complete_route_info(self, query_lower: str) -> bool:
+        """Check if query contains complete route information (both origin and destination)"""
+        
+        # 🔧 FIX: Don't treat follow-up change phrases as complete routes
+        change_phrases = [
+            'change destination to', 'change to', 'destination to', 'change origin to',
+            'origin to', 'go to', 'fly to'
+        ]
+        
+        # If query contains change phrases, it's likely a follow-up, not a complete route
+        if any(phrase in query_lower for phrase in change_phrases):
+            return False
+        
+        cities = [
+            'delhi', 'mumbai', 'bangalore', 'chennai', 'kolkata', 'hyderabad',
+            'pune', 'ahmedabad', 'kochi', 'goa', 'jaipur', 'lucknow',
+            'del', 'bom', 'blr', 'maa', 'ccu', 'hyd', 'pnq', 'amd', 'cok', 'goi',
+            # Common misspellings
+            'deli', 'dehli', 'mumbay', 'bombay', 'bangalor', 'banglore',
+            'chenai', 'channai', 'cochin'
+        ]
+
+        # Check for explicit "from X to Y" pattern (but not change phrases)
+        if 'from' in query_lower and 'to' in query_lower:
+            return True
+
+        # Count how many different cities are mentioned
+        cities_found = []
+        for city in cities:
+            if city in query_lower:
+                cities_found.append(city)
+
+        # If 2 or more different cities are mentioned, likely a complete route
+        if len(set(cities_found)) >= 2:
+            return True
+
+        return False
+
+    def _extract_city_from_query(self, query: str) -> Optional[str]:
+        """Extract city name from query and return airport code"""
+        query_lower = query.lower()
+        
+        # City to airport code mapping
+        city_map = {
+            'delhi': 'DEL', 'mumbai': 'BOM', 'bangalore': 'BLR', 'chennai': 'MAA',
+            'kolkata': 'CCU', 'hyderabad': 'HYD', 'pune': 'PNQ', 'ahmedabad': 'AMD',
+            'kochi': 'COK', 'goa': 'GOI', 'jaipur': 'JAI', 'lucknow': 'LKO',
+            # Common misspellings
+            'deli': 'DEL', 'dehli': 'DEL', 'mumbay': 'BOM', 'bombay': 'BOM',
+            'bangalor': 'BLR', 'banglore': 'BLR', 'chenai': 'MAA', 'channai': 'MAA',
+            'cochin': 'COK'
+        }
+        
+        # Look for cities in the query
+        for city, code in city_map.items():
+            if city in query_lower:
+                return code
+        
+        return None
 
 import logging
 import requests
@@ -557,6 +634,30 @@ class SimpleOpenAIHandler:
             # Keep same parameters, just indicate it's a "show more" request
             self.logger.info(f"🔄 Follow-up: Show more options")
 
+        elif follow_up_type == "destination_change":
+            # Extract new destination from the query
+            self.logger.info(f"🔄 Follow-up: Destination change requested")
+            new_destination = self.conversation_memory._extract_city_from_query(original_query)
+            if new_destination:
+                new_params["destination"] = new_destination
+                self.logger.info(f"🔄 Follow-up: Changed destination to {new_destination}")
+                return new_params
+            else:
+                self.logger.warning(f"🔄 Follow-up: Could not extract destination from '{original_query}'")
+                return None
+
+        elif follow_up_type == "origin_change":
+            # Extract new origin from the query
+            self.logger.info(f"🔄 Follow-up: Origin change requested")
+            new_origin = self.conversation_memory._extract_city_from_query(original_query)
+            if new_origin:
+                new_params["origin"] = new_origin
+                self.logger.info(f"🔄 Follow-up: Changed origin to {new_origin}")
+                return new_params
+            else:
+                self.logger.warning(f"🔄 Follow-up: Could not extract origin from '{original_query}'")
+                return None
+
         elif follow_up_type == "route_change_same_date":
             # Extract new route from the query but keep the same date
             self.logger.info(f"🔄 Follow-up: Route change with same date from previous search")
@@ -585,11 +686,13 @@ class SimpleOpenAIHandler:
         try:
             # Initialize follow-up metadata
             follow_up_metadata = None
+            is_follow_up_query = False
 
-            # Check for follow-up queries first
+            # Check for follow-up queries first - this takes priority over classification
             if user_id and db:
                 follow_up_info = self.conversation_memory.detect_follow_up_query(query, user_id, db)
                 if follow_up_info:
+                    is_follow_up_query = True
                     self.logger.info(f"🔄 Processing follow-up query: {follow_up_info['type']}")
                     modified_params = self.handle_follow_up_query(follow_up_info)
 
@@ -609,29 +712,30 @@ class SimpleOpenAIHandler:
                             "original_query": follow_up_info["original_query"]
                         }
 
-            # First, classify the query type
-            classification = self.classify_query_type(query)
+            # Only classify query type if it's not a follow-up
+            if not is_follow_up_query:
+                classification = self.classify_query_type(query)
+                
+                if classification["type"] == "general_query":
+                    # Provide context-aware responses based on query content
+                    query_lower = query.lower()
 
-            if classification["type"] == "general_query":
-                # Provide context-aware responses based on query content
-                query_lower = query.lower()
+                    if any(word in query_lower for word in ['weather', 'temperature', 'rain', 'sunny']):
+                        message = "I can't check weather, but I can help you find flights! Weather is important for travel planning."
+                    elif any(word in query_lower for word in ['joke', 'funny', 'laugh']):
+                        message = "I'm not a comedian, but I can make your travel planning fun! Let me find you great flight deals."
+                    elif any(word in query_lower for word in ['food', 'cook', 'recipe', 'eat']):
+                        message = "I can't help with cooking, but I can help you fly to places with amazing food!"
+                    elif any(word in query_lower for word in ['capital', 'country', 'geography']):
+                        message = "I can't answer geography questions, but I can help you fly to any capital city!"
+                    else:
+                        message = classification["suggestion"]
 
-                if any(word in query_lower for word in ['weather', 'temperature', 'rain', 'sunny']):
-                    message = "I can't check weather, but I can help you find flights! Weather is important for travel planning."
-                elif any(word in query_lower for word in ['joke', 'funny', 'laugh']):
-                    message = "I'm not a comedian, but I can make your travel planning fun! Let me find you great flight deals."
-                elif any(word in query_lower for word in ['food', 'cook', 'recipe', 'eat']):
-                    message = "I can't help with cooking, but I can help you fly to places with amazing food!"
-                elif any(word in query_lower for word in ['capital', 'country', 'geography']):
-                    message = "I can't answer geography questions, but I can help you fly to any capital city!"
-                else:
-                    message = classification["suggestion"]
-
-                return {
-                    "error": "general_query",
-                    "message": message,
-                    "suggestions": self.get_smart_suggestions(query)
-                }
+                    return {
+                        "error": "general_query",
+                        "message": message,
+                        "suggestions": self.get_smart_suggestions(query)
+                    }
 
             system_prompt = """
             You are a flight search assistant. Extract flight search parameters from user queries.
