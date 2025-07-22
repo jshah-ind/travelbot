@@ -1,0 +1,43 @@
+# Core FastAPI and web framework
+fastapi==0.115.13
+uvicorn==0.32.1
+python-multipart==0.0.20
+
+# HTTP client for API calls
+httpx==0.28.1
+
+# OpenAI integration
+openai==1.91.0
+
+# Amadeus flight API
+amadeus==12.0.0
+
+# Database and ORM
+sqlalchemy==2.0.36
+psycopg2==2.9.10
+
+# Authentication and security
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+
+# Data validation
+pydantic==2.11.7
+pydantic-settings==2.10.1
+
+# Date/time handling
+python-dateutil==2.9.0.post0
+
+# Environment variables
+python-dotenv==1.1.1
+
+# CORS middleware
+starlette==0.46.2
+
+# Async support
+anyio==4.9.0
+
+# JSON Web Tokens
+cryptography==44.0.0
+
+# HTTP utilities
+requests==2.32.4

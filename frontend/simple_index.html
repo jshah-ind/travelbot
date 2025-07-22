@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Travel Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 800px;
+            width: 90%;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .search-form {
+            margin-bottom: 30px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .search-btn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .search-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .search-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .examples {
+            margin-bottom: 20px;
+        }
+
+        .examples h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .example-queries {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .example-query {
+            background: #f0f0f0;
+            padding: 8px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        .example-query:hover {
+            background: #e0e0e0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .results h3 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .flight-card {
+            background: #f9f9f9;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .flight-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .flight-number {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .flight-price {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .flight-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .detail-value {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .error {
+            background: #ffe6e6;
+            color: #d63031;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        @media (max-width: 600px) {
+            .input-group {
+                flex-direction: column;
+            }
+            
+            .flight-details {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✈️ Simple Travel Agent</h1>
+            <p>Find flights using natural language powered by OpenAI</p>
+        </div>
+
+        <div class="search-form">
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="searchInput" 
+                    class="search-input" 
+                    placeholder="e.g., Find flights from Delhi to Mumbai for August 18"
+                    onkeypress="handleKeyPress(event)"
+                >
+                <button onclick="searchFlights()" class="search-btn" id="searchBtn">
+                    Search Flights
+                </button>
+            </div>
+
+            <div class="examples">
+                <h3>Try these examples:</h3>
+                <div class="example-queries">
+                    <span class="example-query" onclick="setQuery('Search flights from Delhi to Mumbai for August 18')">
+                        Delhi to Mumbai for August 18
+                    </span>
+                    <span class="example-query" onclick="setQuery('Find flights from Mumbai to Delhi tomorrow')">
+                        Mumbai to Delhi tomorrow
+                    </span>
+                    <span class="example-query" onclick="setQuery('Flights from Bangalore to Chennai next week')">
+                        Bangalore to Chennai next week
+                    </span>
+                    <span class="example-query" onclick="setQuery('Show me flights from Kolkata to Goa in September')">
+                        Kolkata to Goa in September
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        function setQuery(query) {
+            document.getElementById('searchInput').value = query;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                searchFlights();
+            }
+        }
+
+        async function searchFlights() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+
+            const searchBtn = document.getElementById('searchBtn');
+            const resultsDiv = document.getElementById('results');
+
+            // Show loading state
+            searchBtn.disabled = true;
+            searchBtn.textContent = 'Searching...';
+            resultsDiv.innerHTML = '<div class="loading">🔍 Searching for flights...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/search`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        user_id: 'web_user'
+                    })
+                });
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                console.error('Search error:', error);
+                resultsDiv.innerHTML = `
+                    <div class="error">
+                        ❌ Error searching flights: ${error.message}
+                    </div>
+                `;
+            } finally {
+                searchBtn.disabled = false;
+                searchBtn.textContent = 'Search Flights';
+            }
+        }
+
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+
+            if (data.status === 'error') {
+                resultsDiv.innerHTML = `
+                    <div class="error">
+                        ❌ ${data.message}
+                    </div>
+                `;
+                return;
+            }
+
+            if (!data.flights || data.flights.length === 0) {
+                resultsDiv.innerHTML = `
+                    <div class="no-results">
+                        ✈️ No flights found for your search criteria.
+                        <br>Try adjusting your dates or destinations.
+                    </div>
+                `;
+                return;
+            }
+
+            const searchInfo = data.search_info;
+            let html = `
+                <h3>✅ ${data.message}</h3>
+                <p style="color: #666; margin-bottom: 20px;">
+                    ${searchInfo.origin} → ${searchInfo.destination} on ${searchInfo.departure_date}
+                </p>
+            `;
+
+            data.flights.forEach(flight => {
+                html += `
+                    <div class="flight-card">
+                        <div class="flight-header">
+                            <div class="flight-number">${flight.flight_number} - ${flight.airline}</div>
+                            <div class="flight-price">
+                                <div style="font-size: 1.2em; color: #667eea;">${flight.price}</div>
+                                ${flight.price_eur ? `<div style="font-size: 0.9em; color: #999;">${flight.price_eur}</div>` : ''}
+                            </div>
+                        </div>
+                        <div class="flight-details">
+                            <div class="detail-item">
+                                <div class="detail-label">Departure</div>
+                                <div class="detail-value">${flight.departure_time} from ${flight.departure_airport}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">Arrival</div>
+                                <div class="detail-value">${flight.arrival_time} at ${flight.arrival_airport}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">Duration</div>
+                                <div class="detail-value">${formatDuration(flight.duration)}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">Class</div>
+                                <div class="detail-value">${flight.cabin_class}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">Stops</div>
+                                <div class="detail-value">${flight.is_direct ? 'Direct' : flight.stops + ' stop(s)'}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function formatDuration(duration) {
+            // Convert PT2H15M to "2h 15m"
+            const match = duration.match(/PT(\d+H)?(\d+M)?/);
+            if (!match) return duration;
+            
+            let result = '';
+            if (match[1]) result += match[1].replace('H', 'h ');
+            if (match[2]) result += match[2].replace('M', 'm');
+            
+            return result.trim();
+        }
+
+        // Auto-focus search input
+        document.getElementById('searchInput').focus();
+    </script>
+</body>
+</html>

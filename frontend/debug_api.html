@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Debug Test</title>
+</head>
+<body>
+    <h1>API Debug Test</h1>
+    <button onclick="testSignup()">Test Signup API</button>
+    <div id="result"></div>
+
+    <script>
+        // Mimic the exact API client structure from React app
+        const apiClient = {
+            async request(endpoint, options = {}) {
+                const url = `http://localhost:8000${endpoint}`;
+
+                const config = {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(options.headers || {}),
+                    },
+                    ...options,
+                };
+
+                console.log(`🔍 API: Making ${options.method || 'GET'} request to ${url}`);
+                console.log(`🔍 API: Request config:`, config);
+                console.log(`🔍 API: Request body:`, config.body);
+                console.log(`🔍 API: Request headers:`, config.headers);
+
+                const response = await fetch(url, config);
+                console.log(`🔍 API: Response status: ${response.status}, ok: ${response.ok}`);
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    console.log(`🔍 API: Error response data:`, errorData);
+                    throw new Error(errorData.detail || 'API Error');
+                }
+
+                const responseData = await response.json();
+                console.log(`🔍 API: Success response data:`, responseData);
+                return responseData;
+            },
+
+            post(endpoint, data, headers) {
+                return this.request(endpoint, {
+                    method: 'POST',
+                    body: data ? JSON.stringify(data) : undefined,
+                    headers: headers || {},
+                });
+            }
+        };
+
+        async function testSignup() {
+            const data = {
+                email: 'debug2@test.com',
+                username: 'debugtest2',
+                password: 'testpass123',
+                full_name: 'Debug Test 2'
+            };
+
+            console.log('🔍 Frontend: Making signup request with data:', data);
+            console.log('🔍 Frontend: Data type:', typeof data);
+            console.log('🔍 Frontend: Data keys:', Object.keys(data));
+            console.log('🔍 Frontend: JSON stringified data:', JSON.stringify(data));
+
+            try {
+                const response = await apiClient.post('/auth/signup', data);
+                document.getElementById('result').innerHTML =
+                    '<pre style="color: green;">' + JSON.stringify(response, null, 2) + '</pre>';
+            } catch (error) {
+                console.error('🔍 Error:', error);
+                document.getElementById('result').innerHTML =
+                    '<pre style="color: red;">Error: ' + error.message + '</pre>';
+            }
+        }
+    </script>
+</body>
+</html>
