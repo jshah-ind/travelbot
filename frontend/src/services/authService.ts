@@ -1,4 +1,4 @@
-import { apiClient } from './api';
+import { apiClient, setAuthServiceReference } from './api';
 
 export interface User {
   id: number;
@@ -50,6 +50,12 @@ class AuthService {
   private readonly TOKEN_KEY = 'travel_agent_token';
   private readonly REFRESH_TOKEN_KEY = 'travel_agent_refresh_token';
   private readonly USER_KEY = 'travel_agent_user';
+  private refreshPromise: Promise<AuthTokens> | null = null;
+
+  constructor() {
+    // Set reference in API client to avoid circular imports
+    setAuthServiceReference(this);
+  }
 
   // Get stored token
   getToken(): string | null {
@@ -147,7 +153,7 @@ class AuthService {
     }
   }
 
-  // Get current user profile
+  // Get current user profile with automatic token refresh
   async getCurrentUser(): Promise<User> {
     try {
       const response = await apiClient.get<APIResponse<{ user: User }>>(
@@ -170,28 +176,103 @@ class AuthService {
 
   // Refresh access token
   async refreshToken(): Promise<AuthTokens> {
+    // If there's already a refresh in progress, return that promise
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this._performTokenRefresh();
+    
+    try {
+      const result = await this.refreshPromise;
+      return result;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async _performTokenRefresh(): Promise<AuthTokens> {
     try {
       const refreshToken = this.getRefreshToken();
       if (!refreshToken) {
         throw new Error('No refresh token available');
       }
 
-      const response = await apiClient.post<APIResponse<AuthTokens>>('/auth/refresh', {
-        refresh_token: refreshToken
+      console.log('🔄 AuthService: Attempting to refresh token...');
+      
+      // Make direct fetch call to avoid circular refresh
+      const response = await fetch('http://localhost:8000/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          refresh_token: refreshToken
+        })
       });
 
-      if (response.status === 'success' && response.data) {
-        // Update stored access token
-        localStorage.setItem(this.TOKEN_KEY, response.data.access_token);
-        return response.data;
+      if (!response.ok) {
+        throw new Error(`Token refresh failed: ${response.status}`);
       }
 
-      throw new Error('Token refresh failed');
+      const data = await response.json();
+      console.log('✅ AuthService: Token refresh response:', data);
+
+      if (data.status === 'success' && data.data) {
+        // Update stored access token
+        localStorage.setItem(this.TOKEN_KEY, data.data.access_token);
+        // Also update refresh token if provided
+        if (data.data.refresh_token) {
+          localStorage.setItem(this.REFRESH_TOKEN_KEY, data.data.refresh_token);
+        }
+        console.log('✅ AuthService: Token refreshed successfully');
+        return data.data;
+      }
+
+      throw new Error('Token refresh failed: Invalid response');
     } catch (error) {
-      console.error('Token refresh failed:', error);
+      console.error('❌ AuthService: Token refresh failed:', error);
       // Clear auth data if refresh fails
       this.clearAuthData();
       throw error;
+    }
+  }
+
+  // Validate current session and try to refresh if needed
+  async validateSession(): Promise<User | null> {
+    try {
+      const token = this.getToken();
+      const user = this.getUser();
+      
+      if (!token || !user) {
+        return null;
+      }
+
+      // Try to get current user (this will auto-refresh token if needed)
+      const currentUser = await this.getCurrentUser();
+      return currentUser;
+    } catch (error) {
+      console.error('Session validation failed:', error);
+      
+      // Try to refresh token if we have a refresh token
+      const refreshToken = this.getRefreshToken();
+      if (refreshToken) {
+        try {
+          console.log('🔄 AuthService: Attempting session recovery via token refresh...');
+          await this.refreshToken();
+          // Try to get user again after refresh
+          const currentUser = await this.getCurrentUser();
+          return currentUser;
+        } catch (refreshError) {
+          console.error('❌ AuthService: Session recovery failed:', refreshError);
+          this.clearAuthData();
+          return null;
+        }
+      }
+      
+      // No refresh token available, clear auth data
+      this.clearAuthData();
+      return null;
     }
   }
 

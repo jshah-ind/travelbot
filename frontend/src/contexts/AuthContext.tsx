@@ -31,33 +31,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const isAuthenticated = !!user && authService.isAuthenticated();
 
-  // Initialize auth state
+  // Initialize auth state with improved session validation
   useEffect(() => {
     const initializeAuth = async () => {
       try {
         setIsLoading(true);
+        console.log('🔄 AuthContext: Initializing authentication...');
         
-        // Check if user is stored locally
-        const storedUser = authService.getUser();
-        const token = authService.getToken();
+        // Use the new validateSession method which handles token refresh
+        const validatedUser = await authService.validateSession();
         
-        if (storedUser && token) {
-          try {
-            // Verify token is still valid by fetching current user
-            const currentUser = await authService.getCurrentUser();
-            setUser(currentUser);
-          } catch (error) {
-            console.error('Token validation failed:', error);
-            // Clear invalid auth data
-            await authService.signout();
-            setUser(null);
-          }
+        if (validatedUser) {
+          console.log('✅ AuthContext: Session validated successfully');
+          setUser(validatedUser);
+        } else {
+          console.log('ℹ️ AuthContext: No valid session found');
+          setUser(null);
         }
       } catch (error) {
-        console.error('Auth initialization failed:', error);
+        console.error('❌ AuthContext: Auth initialization failed:', error);
         setUser(null);
       } finally {
         setIsLoading(false);
+        console.log('✅ AuthContext: Auth initialization completed');
       }
     };
 
@@ -67,15 +63,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const signin = async (data: LoginRequest) => {
     try {
       setIsLoading(true);
+      console.log('🔄 AuthContext: Signing in...');
       const response = await authService.signin(data);
       
       if (response.status === 'success' && response.data) {
+        console.log('✅ AuthContext: Signin successful');
         setUser(response.data.user);
       } else {
         throw new Error(response.message || 'Signin failed');
       }
     } catch (error) {
-      console.error('Signin error:', error);
+      console.error('❌ AuthContext: Signin error:', error);
       throw error;
     } finally {
       setIsLoading(false);
@@ -85,15 +83,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const signup = async (data: SignupRequest) => {
     try {
       setIsLoading(true);
+      console.log('🔄 AuthContext: Signing up...');
       const response = await authService.signup(data);
       
       if (response.status === 'success' && response.data) {
+        console.log('✅ AuthContext: Signup successful');
         setUser(response.data.user);
       } else {
         throw new Error(response.message || 'Signup failed');
       }
     } catch (error) {
-      console.error('Signup error:', error);
+      console.error('❌ AuthContext: Signup error:', error);
       throw error;
     } finally {
       setIsLoading(false);
@@ -103,10 +103,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const signout = async () => {
     try {
       setIsLoading(true);
+      console.log('🔄 AuthContext: Signing out...');
       await authService.signout();
       setUser(null);
+      console.log('✅ AuthContext: Signout successful');
     } catch (error) {
-      console.error('Signout error:', error);
+      console.error('❌ AuthContext: Signout error:', error);
       // Clear user state even if API call fails
       setUser(null);
     } finally {
@@ -116,12 +118,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const refreshUser = async () => {
     try {
-      if (authService.isAuthenticated()) {
-        const currentUser = await authService.getCurrentUser();
-        setUser(currentUser);
+      console.log('🔄 AuthContext: Refreshing user...');
+      const validatedUser = await authService.validateSession();
+      
+      if (validatedUser) {
+        console.log('✅ AuthContext: User refreshed successfully');
+        setUser(validatedUser);
+      } else {
+        console.log('ℹ️ AuthContext: User refresh failed - signing out');
+        setUser(null);
       }
     } catch (error) {
-      console.error('Refresh user failed:', error);
+      console.error('❌ AuthContext: Refresh user failed:', error);
       // If refresh fails, sign out user
       await signout();
     }

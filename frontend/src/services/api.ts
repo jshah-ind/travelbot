@@ -1,5 +1,13 @@
 const API_BASE_URL = 'http://localhost:8000'; // Your flight search API
 
+// Import authService to handle token refresh
+let authService: any = null;
+
+// Function to set authService reference (to avoid circular imports)
+export const setAuthServiceReference = (service: any) => {
+  authService = service;
+};
+
 export const apiClient = {
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
@@ -27,6 +35,44 @@ export const apiClient = {
     try {
       const response = await fetch(url, config);
       console.log(`🔍 API: Response status: ${response.status}, ok: ${response.ok}`);
+
+      // Handle 401 Unauthorized - try to refresh token
+      if (response.status === 401 && authService) {
+        console.log('🔄 API: Received 401, attempting token refresh...');
+        try {
+          await authService.refreshToken();
+          console.log('✅ API: Token refreshed successfully, retrying request...');
+          
+          // Update headers with new token
+          const newHeaders = { ...headers };
+          const authHeaders = authService.getAuthHeaders();
+          Object.assign(newHeaders, authHeaders);
+          
+          // Retry the request with new token
+          const retryConfig: RequestInit = {
+            ...options,
+            headers: newHeaders,
+          };
+          
+          const retryResponse = await fetch(url, retryConfig);
+          console.log(`🔍 API: Retry response status: ${retryResponse.status}, ok: ${retryResponse.ok}`);
+          
+          if (!retryResponse.ok) {
+            const errorData = await retryResponse.json().catch(() => ({}));
+            console.log(`🔍 API: Retry error response data:`, errorData);
+            throw new Error(errorData.detail || errorData.error || errorData.message || `API Error: ${retryResponse.status}`);
+          }
+          
+          const retryResponseData = await retryResponse.json();
+          console.log(`🔍 API: Retry success response data:`, retryResponseData);
+          return retryResponseData;
+          
+        } catch (refreshError) {
+          console.error('❌ API: Token refresh failed:', refreshError);
+          // If refresh fails, the authService will handle clearing auth data
+          throw new Error('Session expired. Please login again.');
+        }
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

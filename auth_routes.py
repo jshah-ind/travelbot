@@ -48,7 +48,7 @@ async def debug_signup(request: Request):
         print(f"🔍 DEBUG ERROR: {e}")
         return {"status": "error", "error": str(e)}
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=APIResponse)
 async def get_current_user_info(
     current_user: User = Depends(get_current_user)
 ):
@@ -58,14 +58,19 @@ async def get_current_user_info(
     Returns the authenticated user's profile information.
     Requires valid JWT token in Authorization header.
     """
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        username=current_user.username,
-        full_name=current_user.full_name,
-        is_active=current_user.is_active,
-        created_at=current_user.created_at
-    )
+    try:
+        user_response = UserResponse.model_validate(current_user)
+        return APIResponse(
+            status="success",
+            message="User information retrieved",
+            data={"user": user_response}
+        )
+    except Exception as e:
+        print(f"❌ Error creating user response: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve user information: {str(e)}"
+        )
 
 @router.post("/signup", response_model=APIResponse)
 async def signup(
@@ -290,19 +295,6 @@ async def logout(
             detail=f"Logout failed: {str(e)}"
         )
 
-@router.get("/me", response_model=APIResponse)
-async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get current user information
-    """
-    return APIResponse(
-        status="success",
-        message="User information retrieved",
-        data={"user": UserResponse.model_validate(current_user)}
-    )
-
 @router.put("/me", response_model=APIResponse)
 async def update_user_profile(
     user_update: UserUpdate,
@@ -336,13 +328,23 @@ async def update_user_profile(
 
 @router.post("/refresh", response_model=APIResponse)
 async def refresh_token(
-    refresh_token: str,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
     Refresh access token using refresh token
     """
     try:
+        # Get the refresh token from request body
+        body = await request.json()
+        refresh_token = body.get("refresh_token")
+        
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token is required"
+            )
+        
         # Verify refresh token
         payload = AuthUtils.verify_token(refresh_token)
         
@@ -366,11 +368,17 @@ async def refresh_token(
             data={"sub": str(user.id), "email": user.email}
         )
         
+        # Optionally create new refresh token for enhanced security
+        new_refresh_token = AuthUtils.create_refresh_token(
+            data={"sub": str(user.id), "email": user.email}
+        )
+        
         return APIResponse(
             status="success",
             message="Token refreshed successfully",
             data={
                 "access_token": new_access_token,
+                "refresh_token": new_refresh_token,
                 "token_type": "bearer",
                 "expires_in": 30 * 60
             }
