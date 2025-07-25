@@ -5,9 +5,13 @@ from sqlalchemy import create_engine, MetaData, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 import os
 from typing import Generator
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # Database configuration
-DATABASE_URL = "postgresql://postgres:password@localhost/travelagent"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Create SQLAlchemy engine
 engine = create_engine(

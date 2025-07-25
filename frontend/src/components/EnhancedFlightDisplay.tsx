@@ -339,10 +339,11 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
                             <div key={connIndex} className="bg-white p-3 rounded border">
                               <div className="font-medium text-sm text-gray-800 mb-1">
                                 Segment {connection.segment}: {connection.flight_number}
+                         
                               </div>
-                              <div className="text-sm text-gray-600">
+                              {/* <div className="text-sm text-gray-600">
                                 {formatConnectionTime(connection.departure, connection.arrival)}
-                              </div>
+                              </div> */}
                               <div className="text-xs text-gray-500">
                                 Duration: {formatDuration(connection.duration)}
                               </div>
@@ -355,14 +356,14 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
 
                   {/* Book Button */}
                   <div className="mt-6 pt-4 border-t border-gray-200">
-                    <button className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-semibold">
+                    {/* <button className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-semibold">
                       Select This Flight - {flight.price}
-                    </button>
+                    </button> */}
                   </div>
                 </div>
               )}
             </div>
-          );
+          )
         })}
       </div>
 

@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:8000'; // Your flight search API
+const API_BASE_URL = 'http://0.0.0.0:8000'; // Your flight search API
 
 // Import authService to handle token refresh
 let authService: any = null;
