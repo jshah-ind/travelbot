@@ -201,7 +201,7 @@ class AuthService {
       console.log('🔄 AuthService: Attempting to refresh token...');
       
       // Make direct fetch call to avoid circular refresh
-      const response = await fetch('http://localhost:8000/auth/refresh', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://0.0.0.0:8000'}/auth/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

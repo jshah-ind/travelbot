@@ -768,10 +768,28 @@ class SimpleOpenAIHandler:
             - "August 18" = 2025-08-18
             - "next month" = 2025-08-15
 
+            CABIN CLASS DETECTION (CRITICAL):
+            - ALWAYS check the entire query for cabin class keywords FIRST
+            - If ANY of these words appear: "business class", "business", "business cabin", "premium economy", "premium", "business only", "only business" = set "cabin_class": "BUSINESS"
+            - If ANY of these words appear: "first class", "first", "luxury", "first only", "only first" = set "cabin_class": "FIRST"
+            - If ANY of these words appear: "economy class", "economy", "coach", "economy only", "only economy" = set "cabin_class": "ECONOMY"
+            - If user says "show only business class" or "business class only" = MUST set "cabin_class": "BUSINESS"
+            - If user says "show only economy class" or "economy class only" = MUST set "cabin_class": "ECONOMY"
+            - Default to "ECONOMY" ONLY if NO cabin class keywords are found
+            - IMPORTANT: When user explicitly requests a specific class, prioritize that over default
+
             SPECIAL HANDLING:
             - If query has cities but NO date mentioned, omit "departure_date" from response
             - If you cannot extract origin/destination, return {"error": "missing_location"}
             - Examples of queries without dates: "find flights for Delhi to Mumbai", "flights from Chennai to Kochi"
+            - ALWAYS check for cabin class keywords in the query and set cabin_class accordingly
+            
+            EXAMPLES:
+            - "show only business class Flight Details" → {"cabin_class": "BUSINESS"}
+            - "business class flights from Delhi to Mumbai" → {"cabin_class": "BUSINESS"}
+            - "show only economy class flights" → {"cabin_class": "ECONOMY"}
+            - "first class tickets" → {"cabin_class": "FIRST"}
+            - "flights from Delhi to Mumbai" → {"cabin_class": "ECONOMY"} (default, no class mentioned)
             """
 
             response = self.client.chat.completions.create(

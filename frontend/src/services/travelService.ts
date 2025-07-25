@@ -99,7 +99,7 @@ export const travelService = {
         };
 
         const searchResponse = await Promise.race([
-          fetch('http://localhost:8000/search', {
+          fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://0.0.0.0:8000'}/search`, {
             method: 'POST',
             headers,
             body: JSON.stringify(searchPayload)
@@ -214,7 +214,7 @@ export const travelService = {
       console.log('🔬 Testing server connection...');
       
       // Test health endpoint
-      const healthTest = await fetch('http://localhost:8000/health');
+      const healthTest = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://0.0.0.0:8000'}/health`);
       console.log('📡 Health endpoint status:', healthTest.status);
       
       if (healthTest.ok) {

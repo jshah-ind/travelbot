@@ -89,6 +89,7 @@ class SimpleTravelAgent:
             logger.info(f"🛫 Searching flights: {params}")
 
             # Search flights using Amadeus
+            logger.info(f"🔍 Amadeus API call with cabin_class: {cabin_class}")
             response = self.amadeus.shopping.flight_offers_search.get(
                 originLocationCode=origin,
                 destinationLocationCode=destination,
@@ -108,6 +109,12 @@ class SimpleTravelAgent:
 
             # Format flights with currency conversion
             formatted_flights = self.formatter.format_amadeus_response(response.data)
+
+            # Debug: Check what cabin classes were returned
+            cabin_classes_returned = set()
+            for flight in formatted_flights:
+                cabin_classes_returned.add(flight.get("cabin_class", "UNKNOWN"))
+            logger.info(f"🔍 Cabin classes returned by Amadeus: {cabin_classes_returned}")
 
             # Sort by price (ascending)
             formatted_flights.sort(key=lambda x: x.get("price_numeric", float('inf')))
@@ -247,12 +254,37 @@ def simple_extract_flight_params(query: str) -> dict:
             departure_date = '2025-08-15'  # Default date
 
 
-    # Extract class
+    # Extract class - Enhanced detection
     cabin_class = 'ECONOMY'
-    if 'business' in query_lower:
+    
+    # Business class detection - check for multiple patterns
+    business_keywords = [
+        'business class', 'business', 'business cabin', 'premium economy', 'premium',
+        'business only', 'only business', 'show only business', 'business class only'
+    ]
+    
+    # First class detection
+    first_keywords = [
+        'first class', 'first', 'luxury', 'first only', 'only first', 'show only first'
+    ]
+    
+    # Economy class detection
+    economy_keywords = [
+        'economy class', 'economy', 'coach', 'economy only', 'only economy', 'show only economy'
+    ]
+    
+    # Check for business class first (highest priority)
+    if any(keyword in query_lower for keyword in business_keywords):
         cabin_class = 'BUSINESS'
-    elif 'first' in query_lower:
+        print(f"🔍 Simple extraction: Detected BUSINESS class from query: {query}")
+    elif any(keyword in query_lower for keyword in first_keywords):
         cabin_class = 'FIRST'
+        print(f"🔍 Simple extraction: Detected FIRST class from query: {query}")
+    elif any(keyword in query_lower for keyword in economy_keywords):
+        cabin_class = 'ECONOMY'
+        print(f"🔍 Simple extraction: Detected ECONOMY class from query: {query}")
+    else:
+        print(f"🔍 Simple extraction: No class specified, defaulting to ECONOMY for query: {query}")
 
     return {
         'origin': origin or 'DEL',
@@ -324,6 +356,7 @@ async def search_flights(
                 raise HTTPException(status_code=400, detail=error_message)
 
         logger.info(f"✅ Extracted params: {params}")
+        logger.info(f"🔍 Cabin class being used: {params.get('cabin_class', 'NOT SET')}")
 
         # Search flights
         result = await travel_agent.search_flights(params)
