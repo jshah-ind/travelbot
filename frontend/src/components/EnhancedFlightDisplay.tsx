@@ -120,30 +120,26 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
 
   const formatConnectionTime = (departure: string, arrival: string): string => {
     const parseFlightTime = (timeStr: string) => {
-      const airportMatch = timeStr.match(/^([A-Z]{3})/);
-      const dateMatch = timeStr.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+      // Handle new format: "DEL 08:00" or "DEL N/A"
+      const parts = timeStr.split(' ');
+      const airport = parts[0] || '';
+      const time = parts[1] || 'N/A';
       
       return {
-        airport: airportMatch?.[1] || '',
-        date: dateMatch?.[1] ? new Date(dateMatch[1]) : null
+        airport: airport,
+        time: time
       };
     };
     
     const dep = parseFlightTime(departure);
     const arr = parseFlightTime(arrival);
     
-    if (!dep.date || !arr.date) {
-      return 'Invalid time format';
+    // If either time is N/A, show a simplified format
+    if (dep.time === 'N/A' || arr.time === 'N/A') {
+      return `${dep.airport} → ${arr.airport}`;
     }
     
-    const depTime = dep.date.toLocaleTimeString('en-US', { 
-      hour: '2-digit', minute: '2-digit', hour12: false 
-    });
-    const arrTime = arr.date.toLocaleTimeString('en-US', { 
-      hour: '2-digit', minute: '2-digit', hour12: false 
-    });
-    
-    return `${dep.airport} ${depTime} → ${arr.airport} ${arrTime}`;
+    return `${dep.airport} ${dep.time} → ${arr.airport} ${arr.time}`;
   };
 
   const cheapest = processedFlights[0];
@@ -341,9 +337,9 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
                                 Segment {connection.segment}: {connection.flight_number}
                          
                               </div>
-                              {/* <div className="text-sm text-gray-600">
+                              <div className="text-sm text-gray-600">
                                 {formatConnectionTime(connection.departure, connection.arrival)}
-                              </div> */}
+                              </div>
                               <div className="text-xs text-gray-500">
                                 Duration: {formatDuration(connection.duration)}
                               </div>

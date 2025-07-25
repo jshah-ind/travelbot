@@ -973,10 +973,44 @@ class SimpleFlightFormatter:
 
     def __init__(self):
         self.currency_converter = CurrencyConverter()
+    
+    def _safe_extract_time(self, time_string: str) -> str:
+        """Safely extract time from various formats"""
+        try:
+            if not time_string:
+                return "N/A"
+            
+            # Handle ISO format: "2025-08-19T08:00:00"
+            if "T" in time_string and len(time_string) >= 16:
+                return time_string[11:16]  # Extract HH:MM
+            
+            # Handle other formats - return as is
+            return time_string
+        except Exception as e:
+            logger.warning(f"Error extracting time from '{time_string}': {e}")
+            return "N/A"
+    
+    def _safe_extract_date(self, date_string: str) -> str:
+        """Safely extract date from various formats"""
+        try:
+            if not date_string:
+                return "N/A"
+            
+            # Handle ISO format: "2025-08-19T08:00:00"
+            if "T" in date_string and len(date_string) >= 10:
+                return date_string[:10]  # Extract YYYY-MM-DD
+            
+            # Handle other formats - return as is
+            return date_string
+        except Exception as e:
+            logger.warning(f"Error extracting date from '{date_string}': {e}")
+            return "N/A"
 
-    def format_amadeus_response(self, amadeus_data: List[Dict]) -> List[Dict[str, Any]]:
-        """Format Amadeus API response to simple structure with INR conversion"""
+    def format_amadeus_response(self, amadeus_data: List[Dict], requested_cabin_class: str = None) -> List[Dict[str, Any]]:
+        """Format Amadeus API response to simple structure with INR conversion and cabin class filtering"""
         flights = []
+        
+        logger.info(f"🔍 Formatting flights with requested cabin class: {requested_cabin_class}")
 
         for offer in amadeus_data:
             try:
@@ -997,6 +1031,11 @@ class SimpleFlightFormatter:
                             cabin_class = fare_details.get("cabin", "ECONOMY")
                 except Exception as e:
                     logger.debug(f"Could not extract cabin class, using default: {e}")
+                
+                # Filter by requested cabin class if specified
+                if requested_cabin_class and cabin_class != requested_cabin_class:
+                    logger.debug(f"🔍 Skipping flight with cabin class {cabin_class} (requested: {requested_cabin_class})")
+                    continue
 
                 # Extract additional flight details
                 aircraft = segment.get("aircraft", {}).get("code", "N/A")
@@ -1007,13 +1046,22 @@ class SimpleFlightFormatter:
                 # Create route string
                 route = f"{segment['departure']['iataCode']} → {segment['arrival']['iataCode']}"
 
+                # Safely extract departure and arrival times
+                departure_at = segment["departure"]["at"]
+                arrival_at = segment["arrival"]["at"]
+                
+                departure_date = self._safe_extract_date(departure_at)
+                departure_time = self._safe_extract_time(departure_at)
+                arrival_date = self._safe_extract_date(arrival_at)
+                arrival_time = self._safe_extract_time(arrival_at)
+                
                 flight = {
                     "flight_number": f"{segment['carrierCode']}{segment['number']}",
                     "airline": segment["carrierCode"],
-                    "departure_date": segment["departure"]["at"][:10],
-                    "departure_time": segment["departure"]["at"][11:16],
-                    "arrival_date": segment["arrival"]["at"][:10],
-                    "arrival_time": segment["arrival"]["at"][11:16],
+                    "departure_date": departure_date,
+                    "departure_time": departure_time,
+                    "arrival_date": arrival_date,
+                    "arrival_time": arrival_time,
                     "departure_airport": segment["departure"]["iataCode"],
                     "arrival_airport": segment["arrival"]["iataCode"],
                     "departure_terminal": departure_terminal,
@@ -1038,13 +1086,31 @@ class SimpleFlightFormatter:
                 if len(itinerary["segments"]) > 1:
                     connecting_flights = []
                     for i, seg in enumerate(itinerary["segments"]):
-                        connecting_flights.append({
-                            "segment": i + 1,
-                            "flight_number": f"{seg['carrierCode']}{seg['number']}",
-                            "departure": f"{seg['departure']['iataCode']} {seg['departure']['at'][11:16]}",
-                            "arrival": f"{seg['arrival']['iataCode']} {seg['arrival']['at'][11:16]}",
-                            "duration": seg.get("duration", "N/A")
-                        })
+                        try:
+                            # Safely extract departure and arrival times
+                            departure_at = seg.get("departure", {}).get("at", "")
+                            arrival_at = seg.get("arrival", {}).get("at", "")
+                            
+                            departure_time = self._safe_extract_time(departure_at)
+                            arrival_time = self._safe_extract_time(arrival_at)
+                            
+                            connecting_flights.append({
+                                "segment": i + 1,
+                                "flight_number": f"{seg['carrierCode']}{seg['number']}",
+                                "departure": f"{seg['departure']['iataCode']} {departure_time}",
+                                "arrival": f"{seg['arrival']['iataCode']} {arrival_time}",
+                                "duration": seg.get("duration", "N/A")
+                            })
+                        except Exception as e:
+                            logger.warning(f"Error formatting connecting flight segment {i+1}: {e}")
+                            # Add a fallback entry
+                            connecting_flights.append({
+                                "segment": i + 1,
+                                "flight_number": f"{seg.get('carrierCode', 'N/A')}{seg.get('number', 'N/A')}",
+                                "departure": f"{seg.get('departure', {}).get('iataCode', 'N/A')} N/A",
+                                "arrival": f"{seg.get('arrival', {}).get('iataCode', 'N/A')} N/A",
+                                "duration": seg.get("duration", "N/A")
+                            })
                     flight["connecting_flights"] = connecting_flights
 
                 flights.append(flight)

@@ -107,8 +107,8 @@ class SimpleTravelAgent:
                     "search_info": params
                 }
 
-            # Format flights with currency conversion
-            formatted_flights = self.formatter.format_amadeus_response(response.data)
+            # Format flights with currency conversion and cabin class filtering
+            formatted_flights = self.formatter.format_amadeus_response(response.data, cabin_class)
 
             # Debug: Check what cabin classes were returned
             cabin_classes_returned = set()
@@ -357,6 +357,7 @@ async def search_flights(
 
         logger.info(f"✅ Extracted params: {params}")
         logger.info(f"🔍 Cabin class being used: {params.get('cabin_class', 'NOT SET')}")
+        logger.info(f"🔍 Query was: '{request.query}'")
 
         # Search flights
         result = await travel_agent.search_flights(params)
