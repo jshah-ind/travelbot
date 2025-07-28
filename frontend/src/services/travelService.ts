@@ -105,7 +105,7 @@ export const travelService = {
             body: JSON.stringify(searchPayload)
           }),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Search API timeout')), 120000) // 2 minutes for flight searches
+            setTimeout(() => reject(new Error('Request timeout after 180 seconds. Please try again in a moment.')), 180000) // 180 seconds timeout for complex queries
           )
         ]) as Response;
 
@@ -116,11 +116,11 @@ export const travelService = {
           console.log('✅ Search endpoint succeeded:', searchData);
 
           // Transform the response to match expected format
-          if (searchData.status === 'success' && searchData.flights && searchData.flights.length > 0) {
+          if (searchData.status === 'success') {
             return {
               status: 'success',
               data: {
-                flights: searchData.flights,
+                flights: searchData.flights || [],
                 message: searchData.message,
                 search_info: searchData.search_info
               },

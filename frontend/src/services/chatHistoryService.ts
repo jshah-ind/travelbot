@@ -163,19 +163,32 @@ class ChatHistoryService {
   // Add message to session
   async addMessage(data: CreateMessageRequest): Promise<ChatMessage> {
     try {
+      console.log('📤 Sending addMessage request:', {
+        url: '/chat/messages',
+        data: {
+          ...data,
+          content: data.content ? data.content.substring(0, 50) + '...' : 'empty'
+        },
+        headers: this.getAuthHeaders()
+      });
+      
       const response = await apiClient.post<APIResponse<{ message: ChatMessage }>>(
         '/chat/messages',
         data,
         this.getAuthHeaders()
       );
 
+      console.log('📥 addMessage response:', response);
+
       if (response.status === 'success' && response.data) {
+        console.log('✅ Message added successfully:', response.data.message);
         return response.data.message;
       }
 
+      console.error('❌ addMessage failed - invalid response:', response);
       throw new Error('Failed to add message');
     } catch (error) {
-      console.error('Add message failed:', error);
+      console.error('❌ Add message failed:', error);
       throw error;
     }
   }

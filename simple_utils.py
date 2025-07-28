@@ -11,7 +11,33 @@ from typing import Dict, Any, List, Optional
 import openai
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
+import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
+
+# Multi-AI handler imports
+try:
+    from multi_ai_handler_v2 import MultiAIHandlerV2
+    from enhanced_airline_detector_postgres import EnhancedAirlineDetectorPostgres
+    
+    multi_ai_handler = MultiAIHandlerV2()
+    
+    # Get database configuration from environment
+    db_config = {
+        'host': os.getenv('DB_HOST', 'localhost'),
+        'port': os.getenv('DB_PORT', '5432'),
+        'database': os.getenv('DB_NAME', 'travelagent'),
+        'user': os.getenv('DB_USER', 'postgres'),
+        'password': os.getenv('DB_PASSWORD', 'password')
+    }
+    
+    airline_detector = EnhancedAirlineDetectorPostgres(db_config)
+except ImportError:
+    multi_ai_handler = None
+    airline_detector = None
+    print("⚠️ Multi-AI handler or airline detector not available")
 
 class ConversationMemory:
     """Manages conversation context and follow-up queries using database storage"""
@@ -78,7 +104,12 @@ class ConversationMemory:
             if user_id == "guest_user":
                 db_user_id = -1
             else:
-                db_user_id = int(user_id)
+                # 🔧 FIX: Handle non-numeric user IDs gracefully
+                try:
+                    db_user_id = int(user_id)
+                except ValueError:
+                    self.logger.warning(f"⚠️ Non-numeric user ID: {user_id}, treating as guest")
+                    db_user_id = -1
 
             # Get most recent active flight search context
             context = db.query(ConversationContext).filter(
@@ -118,7 +149,12 @@ class ConversationMemory:
             if user_id == "guest_user":
                 db_user_id = -1
             else:
-                db_user_id = int(user_id)
+                # 🔧 FIX: Handle non-numeric user IDs gracefully
+                try:
+                    db_user_id = int(user_id)
+                except ValueError:
+                    self.logger.warning(f"⚠️ Non-numeric user ID in cleanup: {user_id}, treating as guest")
+                    db_user_id = -1
 
             db.query(ConversationContext).filter(
                 and_(
@@ -138,10 +174,20 @@ class ConversationMemory:
         try:
             from auth_models import ConversationContext
 
+            # 🔧 FIX: Handle non-numeric user IDs gracefully
+            if user_id == "guest_user":
+                db_user_id = -1
+            else:
+                try:
+                    db_user_id = int(user_id)
+                except ValueError:
+                    self.logger.warning(f"⚠️ Non-numeric user ID in limit contexts: {user_id}, treating as guest")
+                    db_user_id = -1
+
             # Get all active contexts for user, ordered by creation date
             contexts = db.query(ConversationContext).filter(
                 and_(
-                    ConversationContext.user_id == int(user_id),
+                    ConversationContext.user_id == db_user_id,
                     ConversationContext.is_active == True
                 )
             ).order_by(ConversationContext.created_at.desc()).all()
@@ -247,6 +293,44 @@ class ConversationMemory:
                 "original_query": query
             }
 
+        # 🔄 NEW: Check if this is a filter-only modification (no route, no date, but has filters)
+        # This handles cases like "air india flights only", "direct flights only", etc.
+        filter_keywords = [
+            'air india', 'indigo', 'vistara', 'spicejet', 'go first', 'direct', 'non-stop',
+            'business class', 'economy class', 'first class', 'premium', 'under', 'cheaper',
+            'morning', 'evening', 'afternoon', 'no ', 'exclude', 'prefer', 'only', 'shows only'
+        ]
+        
+        has_filter_keywords = any(keyword in query_lower for keyword in filter_keywords)
+        self.logger.info(f"🔍 DEBUG: Query '{query}' - has_filter_keywords: {has_filter_keywords}, has_route: {self._has_route_info(query_lower)}, has_date: {self._has_date_info(query_lower)}")
+        
+        if has_filter_keywords and not self._has_route_info(query_lower) and not self._has_date_info(query_lower):
+            self.logger.info(f"🔄 Detected filter-only modification for user {user_id}")
+            return {
+                "type": "filter_change_same_route",
+                "last_search": last_search,
+                "original_query": query
+            }
+
+        # 🔄 NEW: Check if this is a filter-only query (no route, no date, but has filters)
+        # This handles cases like "air india flights only", "direct flights only", etc.
+        if not self._has_route_info(query_lower) and not self._has_date_info(query_lower):
+            # Check if query contains filter keywords
+            filter_keywords = [
+                'direct', 'business', 'economy', 'premium', 'first class',
+                'air india', 'indigo', 'vistara', 'spicejet', 'go first',
+                'under', 'less than', 'cheaper than', 'morning', 'evening', 'afternoon',
+                'no ', 'exclude', 'prefer', 'preferably', 'maximum', 'max'
+            ]
+            
+            if any(keyword in query_lower for keyword in filter_keywords):
+                self.logger.info(f"🔄 Detected filter-only query for user {user_id}")
+                return {
+                    "type": "filter_only",
+                    "last_search": last_search,
+                    "original_query": query
+                }
+
         return None
 
     def _has_route_info(self, query_lower: str) -> bool:
@@ -263,6 +347,21 @@ class ConversationMemory:
         # Check for "from X to Y" pattern or individual cities
         has_cities = any(city in query_lower for city in cities)
         has_route_pattern = 'from' in query_lower and 'to' in query_lower
+
+        # 🔧 FIX: Exclude filter-only queries that might contain city names
+        # If query contains filter keywords and no explicit route pattern, it's likely a filter
+        filter_keywords = [
+            'only', 'show only', 'just', 'merely', 'simply', 'exclusively',
+            'air india', 'indigo', 'vistara', 'spicejet', 'go first',
+            'direct', 'non-stop', 'business class', 'economy class',
+            'under', 'less than', 'cheaper than', 'morning', 'evening', 'afternoon'
+        ]
+        
+        has_filter_keywords = any(keyword in query_lower for keyword in filter_keywords)
+        
+        # If it has filter keywords but no explicit route pattern, treat as filter-only
+        if has_filter_keywords and not has_route_pattern:
+            return False
 
         return has_cities or has_route_pattern
 
@@ -352,6 +451,61 @@ class ConversationMemory:
                 return code
         
         return None
+
+    def clear_conversation_context(self, user_id: str, db: Session) -> bool:
+        """Clear all conversation context for a user to stop follow-up questions"""
+        try:
+            # Import here to avoid circular imports
+            from auth_models import ConversationContext
+
+            # Delete all contexts for this user
+            deleted_count = db.query(ConversationContext).filter(
+                ConversationContext.user_id == int(user_id) if user_id != "guest_user" else -1
+            ).delete()
+            
+            db.commit()
+            
+            self.logger.info(f"🗑️ Cleared {deleted_count} conversation contexts for user {user_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to clear conversation context: {e}")
+            db.rollback()
+            return False
+
+    def clear_expired_contexts(self, db: Session) -> int:
+        """Clear all expired conversation contexts"""
+        try:
+            # Import here to avoid circular imports
+            from auth_models import ConversationContext
+
+            # Delete all expired contexts
+            deleted_count = db.query(ConversationContext).filter(
+                ConversationContext.expires_at < datetime.utcnow()
+            ).delete()
+            
+            db.commit()
+            
+            self.logger.info(f"🗑️ Cleared {deleted_count} expired conversation contexts")
+            return deleted_count
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to clear expired contexts: {e}")
+            db.rollback()
+            return 0
+
+    def is_reset_query(self, query: str) -> bool:
+        """Check if query is asking to reset/clear conversation"""
+        query_lower = query.lower().strip()
+        
+        reset_patterns = [
+            "new search", "new query", "start over", "reset", "clear",
+            "forget", "ignore previous", "fresh search", "new conversation",
+            "start again", "begin new", "new flight search", "clear history",
+            "forget everything", "start fresh", "new request", "different search"
+        ]
+        
+        return any(pattern in query_lower for pattern in reset_patterns)
 
 import logging
 import requests
@@ -498,6 +652,69 @@ class SimpleDateParser:
 
         return {"type": "single_date", "date": self.parse_date(query)}
 
+    def parse_date_range(self, query: str) -> Dict[str, Any]:
+        """Parse date range queries like 'August 20 to August 29' or '20 August to 29 August'"""
+        query_lower = query.lower()
+        
+        # Pattern for "August 20 to August 29" or "20 August to 29 August"
+        date_range_patterns = [
+            r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\s+to\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\b',
+            r'\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+to\s+(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b'
+        ]
+        
+        import re
+        from datetime import datetime
+        
+        for pattern in date_range_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                groups = match.groups()
+                
+                if len(groups) == 4:
+                    if groups[0] in self.months:  # First pattern: "August 20 to August 29"
+                        start_month = groups[0]
+                        start_day = int(groups[1])
+                        end_month = groups[2]
+                        end_day = int(groups[3])
+                    else:  # Second pattern: "20 August to 29 August"
+                        start_day = int(groups[0])
+                        start_month = groups[1]
+                        end_day = int(groups[2])
+                        end_month = groups[3]
+                    
+                    # Get current year
+                    current_year = datetime.now().year
+                    
+                    # Handle year transitions (e.g., December to January)
+                    start_month_num = self.months[start_month]
+                    end_month_num = self.months[end_month]
+                    
+                    # Determine years
+                    start_year = current_year
+                    end_year = current_year
+                    
+                    # If start month is in the past, use next year
+                    if start_month_num < datetime.now().month:
+                        start_year += 1
+                        end_year += 1
+                    
+                    # If end month is before start month, end year is next year
+                    if end_month_num < start_month_num:
+                        end_year += 1
+                    
+                    # Create date strings
+                    start_date = f"{start_year}-{start_month_num:02d}-{start_day:02d}"
+                    end_date = f"{end_year}-{end_month_num:02d}-{end_day:02d}"
+                    
+                    return {
+                        "type": "date_range",
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "description": f"{start_month.title()} {start_day} to {end_month.title()} {end_day}"
+                    }
+        
+        return None
+
 class SimpleOpenAIHandler:
     """Simple OpenAI integration for query processing"""
 
@@ -600,10 +817,187 @@ class SimpleOpenAIHandler:
             self.conversation_memory.store_flight_search(user_id, search_params, query, db)
 
     def handle_follow_up_query(self, follow_up_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle follow-up queries based on previous search context"""
+        """Handle follow-up queries and inherit/modify parameters as needed"""
         follow_up_type = follow_up_info["type"]
         last_search = follow_up_info["last_search"]
         original_query = follow_up_info["original_query"]
+
+        if follow_up_type == "filter_change_same_route":
+            inherited_params = {
+                "origin": last_search["params"].get("origin"),
+                "destination": last_search["params"].get("destination"),
+                "departure_date": last_search["params"].get("departure_date"),
+                "passengers": last_search["params"].get("passengers", 1),
+                "cabin_class": last_search["params"].get("cabin_class", "ECONOMY"),
+                "is_follow_up": True,
+                "follow_up_type": "filter_change_same_route",
+                "original_query": original_query
+            }
+            self.logger.info(f"🔄 Follow-up: Inherited route {inherited_params['origin']} → {inherited_params['destination']}")
+            # Extract filters from the original query using OpenAI
+            import asyncio
+            try:
+                # Create a new event loop if one doesn't exist
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If we're already in an async context, we need to handle this differently
+                        self.logger.warning("⚠️ Cannot run async function in sync context, using fallback")
+                        filter_params = None
+                    else:
+                        filter_params = loop.run_until_complete(self._extract_filters_only(original_query))
+                except RuntimeError:
+                    # No event loop, create one
+                    filter_params = asyncio.run(self._extract_filters_only(original_query))
+                
+                self.logger.info(f"🔄 Filter extraction result: {filter_params}")
+                
+                # Use multi-AI handler for filter extraction (OpenAI + Gemini)
+                if multi_ai_handler:
+                    self.logger.info(f"🤖 Using multi-AI handler for query: '{original_query}'")
+                    try:
+                        # Try to run async function in sync context
+                        import asyncio
+                        import concurrent.futures
+                        
+                        # Use ThreadPoolExecutor to run async function
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, multi_ai_handler.extract_filters_multi_ai(original_query))
+                            ai_filter_params = future.result()
+                        
+                        if ai_filter_params:
+                            inherited_params.update(ai_filter_params)
+                            airlines = ai_filter_params.get("filters", {}).get("specific_airlines", [])
+                            self.logger.info(f"🤖 Multi-AI extracted filters: {airlines}")
+                        else:
+                            self.logger.warning(f"⚠️ Multi-AI handler failed to extract filters")
+                    except Exception as e:
+                        self.logger.error(f"❌ Multi-AI handler error: {e}")
+                        
+                        # Try PostgreSQL airline detector as fallback
+                        if airline_detector:
+                            self.logger.info(f"🗄️ Trying PostgreSQL airline detector for query: '{original_query}'")
+                            try:
+                                # Learn from sample data first
+                                sample_amadeus_flights = [
+                                    {
+                                        "validatingAirlineCodes": ["QR"],
+                                        "itineraries": [{
+                                            "segments": [{
+                                                "carrierCode": "QR",
+                                                "operating": {"carrierCode": "Qatar Airways"}
+                                            }]
+                                        }]
+                                    },
+                                    {
+                                        "validatingAirlineCodes": ["SG"],
+                                        "itineraries": [{
+                                            "segments": [{
+                                                "carrierCode": "SG",
+                                                "operating": {"carrierCode": "SpiceJet"}
+                                            }]
+                                        }]
+                                    },
+                                    {
+                                        "validatingAirlineCodes": ["EK"],
+                                        "itineraries": [{
+                                            "segments": [{
+                                                "carrierCode": "EK",
+                                                "operating": {"carrierCode": "Emirates"}
+                                            }]
+                                        }]
+                                    },
+                                    {
+                                        "validatingAirlineCodes": ["AI"],
+                                        "itineraries": [{
+                                            "segments": [{
+                                                "carrierCode": "AI",
+                                                "operating": {"carrierCode": "Air India"}
+                                            }]
+                                        }]
+                                    }
+                                ]
+                                airline_detector.learn_from_amadeus_response(sample_amadeus_flights)
+                                
+                                detected_filters = airline_detector.detect_airlines(original_query)
+                                if detected_filters:
+                                    inherited_params.update(detected_filters)
+                                    airlines = detected_filters["filters"]["specific_airlines"]
+                                    self.logger.info(f"🗄️ PostgreSQL detected airlines: {airlines}")
+                                else:
+                                    self.logger.warning(f"⚠️ PostgreSQL detector failed to extract filters")
+                            except Exception as pg_error:
+                                self.logger.error(f"❌ PostgreSQL detector error: {pg_error}")
+                        
+                        # Final fallback to manual detection
+                        if "qatar" in original_query.lower():
+                            inherited_params["filters"] = {
+                                "specific_airlines": ["Qatar Airways"],
+                                "direct_only": False,
+                                "max_price": None,
+                                "preferred_times": [],
+                                "exclude_airlines": [],
+                                "max_stops": None,
+                                "preferred_airlines": []
+                            }
+                            self.logger.info("🔄 Applied manual fallback Qatar Airways filter")
+                        elif "spicejet" in original_query.lower():
+                            inherited_params["filters"] = {
+                                "specific_airlines": ["SpiceJet"],
+                                "direct_only": False,
+                                "max_price": None,
+                                "preferred_times": [],
+                                "exclude_airlines": [],
+                                "max_stops": None,
+                                "preferred_airlines": []
+                            }
+                            self.logger.info("🔄 Applied manual fallback SpiceJet filter")
+                        elif "emirates" in original_query.lower():
+                            inherited_params["filters"] = {
+                                "specific_airlines": ["Emirates"],
+                                "direct_only": False,
+                                "max_price": None,
+                                "preferred_times": [],
+                                "exclude_airlines": [],
+                                "max_stops": None,
+                                "preferred_airlines": []
+                            }
+                            self.logger.info("🔄 Applied manual fallback Emirates filter")
+                        elif "air india" in original_query.lower():
+                            inherited_params["filters"] = {
+                                "specific_airlines": ["Air India"],
+                                "direct_only": False,
+                                "max_price": None,
+                                "preferred_times": [],
+                                "exclude_airlines": [],
+                                "max_stops": None,
+                                "preferred_airlines": []
+                            }
+                            self.logger.info("🔄 Applied manual fallback Air India filter")
+                else:
+                    self.logger.warning(f"⚠️ Multi-AI handler not available, using fallback.")
+                    if filter_params:
+                        inherited_params.update(filter_params)
+                        self.logger.info(f"🔄 Added filters from follow-up: {filter_params}")
+                    else:
+                        self.logger.warning(f"⚠️ No filters extracted from query: {original_query}")
+                        self.logger.warning(f"⚠️ No airline found in query: '{original_query.lower()}'")
+            except Exception as e:
+                self.logger.error(f"❌ Error extracting filters: {e}")
+                # Fallback: manually extract SpiceJet filter
+                if "spicejet" in original_query.lower():
+                    inherited_params["filters"] = {
+                        "specific_airlines": ["SpiceJet"],
+                        "direct_only": False,
+                        "max_price": None,
+                        "preferred_times": [],
+                        "exclude_airlines": [],
+                        "max_stops": None,
+                        "preferred_airlines": []
+                    }
+                    self.logger.info("🔄 Applied fallback SpiceJet filter")
+            self.logger.info(f"🔄 Final inherited_params: {inherited_params}")
+            return inherited_params
 
         # Create modified search parameters based on follow-up type
         new_params = last_search["params"].copy()
@@ -668,7 +1062,16 @@ class SimpleOpenAIHandler:
         elif follow_up_type == "date_change_same_route":
             # Extract new date from the query but keep the same route
             self.logger.info(f"🔄 Follow-up: Date change with same route from previous search")
-            # Parse the new date from the query
+            
+            # First try to parse date range
+            date_range = self.date_parser.parse_date_range(original_query)
+            if date_range and date_range["type"] == "date_range":
+                new_params["departure_date"] = date_range["start_date"]
+                new_params["date_range_end"] = date_range["end_date"]  # Store for potential future use
+                self.logger.info(f"🔄 Follow-up: Updated to date range {date_range['start_date']} to {date_range['end_date']} (using start date for departure)")
+                return new_params
+            
+            # If not a date range, try to parse single date
             new_date = self.date_parser.parse_date(original_query)
             if new_date:
                 new_params["departure_date"] = new_date
@@ -754,7 +1157,16 @@ class SimpleOpenAIHandler:
                 "destination": "airport_code",
                 "departure_date": "YYYY-MM-DD",
                 "passengers": 1,
-                "cabin_class": "ECONOMY"
+                "cabin_class": "ECONOMY",
+                "filters": {
+                    "direct_only": false,
+                    "specific_airlines": [],
+                    "max_price": null,
+                    "preferred_times": [],
+                    "exclude_airlines": [],
+                    "max_stops": null,
+                    "preferred_airlines": []
+                }
             }
 
             Airport codes:
@@ -778,18 +1190,43 @@ class SimpleOpenAIHandler:
             - Default to "ECONOMY" ONLY if NO cabin class keywords are found
             - IMPORTANT: When user explicitly requests a specific class, prioritize that over default
 
+            ADVANCED FILTERS DETECTION:
+            - "direct flights only", "direct only", "non-stop only", "no stops", "direct flights" = set "filters.direct_only": true
+            - "show only direct flights" = set "filters.direct_only": true
+            - "I want direct flights" = set "filters.direct_only": true
+            - "only Air India", "Air India only", "show Air India flights" = set "filters.specific_airlines": ["Air India"]
+            - "IndiGo flights only", "only IndiGo" = set "filters.specific_airlines": ["IndiGo"]
+            - "Vistara flights", "show Vistara" = set "filters.specific_airlines": ["Vistara"]
+            - "SpiceJet only", "only SpiceJet flights" = set "filters.specific_airlines": ["SpiceJet"]
+            - "GoAir flights", "Go First flights" = set "filters.specific_airlines": ["Go First"]
+            - "under 5000", "less than 5000", "cheaper than 5000" = set "filters.max_price": 5000
+            - "under 10000 rupees", "less than 10000" = set "filters.max_price": 10000
+            - "morning flights", "early morning", "before 10 AM" = set "filters.preferred_times": ["morning"]
+            - "evening flights", "after 6 PM", "night flights" = set "filters.preferred_times": ["evening"]
+            - "afternoon flights", "between 12 PM and 6 PM" = set "filters.preferred_times": ["afternoon"]
+            - "no Air India", "exclude Air India" = set "filters.exclude_airlines": ["Air India"]
+            - "not IndiGo", "exclude IndiGo" = set "filters.exclude_airlines": ["IndiGo"]
+            - "maximum 1 stop", "max 1 stop", "1 stop maximum" = set "filters.max_stops": 1
+            - "no stops", "non-stop", "direct" = set "filters.max_stops": 0
+            - "prefer Air India", "preferably Air India" = set "filters.preferred_airlines": ["Air India"]
+            - "prefer IndiGo", "preferably IndiGo" = set "filters.preferred_airlines": ["IndiGo"]
+
             SPECIAL HANDLING:
             - If query has cities but NO date mentioned, omit "departure_date" from response
             - If you cannot extract origin/destination, return {"error": "missing_location"}
             - Examples of queries without dates: "find flights for Delhi to Mumbai", "flights from Chennai to Kochi"
             - ALWAYS check for cabin class keywords in the query and set cabin_class accordingly
+            - ALWAYS check for filter keywords and set appropriate filters
             
             EXAMPLES:
-            - "show only business class Flight Details" → {"cabin_class": "BUSINESS"}
-            - "business class flights from Delhi to Mumbai" → {"cabin_class": "BUSINESS"}
-            - "show only economy class flights" → {"cabin_class": "ECONOMY"}
-            - "first class tickets" → {"cabin_class": "FIRST"}
-            - "flights from Delhi to Mumbai" → {"cabin_class": "ECONOMY"} (default, no class mentioned)
+            - "direct flights from Delhi to Mumbai" → {"filters": {"direct_only": true}}
+            - "show only Air India flights" → {"filters": {"specific_airlines": ["Air India"]}}
+            - "flights under 5000 rupees" → {"filters": {"max_price": 5000}}
+            - "morning flights only" → {"filters": {"preferred_times": ["morning"]}}
+            - "no Air India flights" → {"filters": {"exclude_airlines": ["Air India"]}}
+            - "maximum 1 stop" → {"filters": {"max_stops": 1}}
+            - "prefer IndiGo" → {"filters": {"preferred_airlines": ["IndiGo"]}}
+            - "business class direct flights only" → {"cabin_class": "BUSINESS", "filters": {"direct_only": true}}
             """
 
             response = self.client.chat.completions.create(
@@ -818,7 +1255,17 @@ class SimpleOpenAIHandler:
 
             # Always enhance date parsing with our custom parser for better accuracy
             custom_date = self.date_parser.parse_date(query)
-            logger.info(f"🔍 Date validation starting: OpenAI={params.get('departure_date', 'None')}, Custom={custom_date}, Query='{query}'")
+            
+            # Check for date ranges first
+            date_range = self.date_parser.parse_date_range(query)
+            if date_range and date_range["type"] == "date_range":
+                # For date ranges, use the start date as departure date
+                # The end date represents the range end, not a return flight
+                params["departure_date"] = date_range["start_date"]
+                params["date_range_end"] = date_range["end_date"]  # Store for potential future use
+                logger.info(f"🔍 Date range detected: {date_range['start_date']} to {date_range['end_date']} (using start date for departure)")
+            else:
+                logger.info(f"🔍 Date validation starting: OpenAI={params.get('departure_date', 'None')}, Custom={custom_date}, Query='{query}'")
 
             # If OpenAI provided a date, check if it's reasonable
             if "departure_date" in params and params["departure_date"]:
@@ -900,34 +1347,97 @@ class SimpleOpenAIHandler:
             if follow_up_metadata is not None:
                 params.update(follow_up_metadata)
                 logger.info(f"🔄 Added follow-up metadata: {follow_up_metadata}")
+            
+            # Special handling for filter-only follow-ups
+            if params.get("follow_up_type") == "filter_change_same_route":
+                # Extract filters from the original query using OpenAI
+                logger.info(f"🔄 Processing filter-only follow-up: {query}")
+                filter_params = await self._extract_filters_only(query)
+                logger.info(f"🔄 Filter extraction result: {filter_params}")
+                if filter_params:
+                    params.update(filter_params)
+                    logger.info(f"🔄 Added filters from follow-up: {filter_params}")
+                else:
+                    logger.warning(f"⚠️ No filters extracted from query: {query}")
 
             return params
 
         except Exception as e:
             logger.error(f"OpenAI extraction error: {e}")
             return {"error": f"openai_error: {str(e)}"}
+
+    async def _extract_filters_only(self, query: str) -> Dict[str, Any]:
+        """Extract only filters from a query (for follow-up filter changes)"""
+        try:
+            logger.info(f"🔄 Starting filter extraction for query: '{query}'")
+            
+            system_prompt = """
+            You are a flight filter extraction assistant. Extract ONLY filters from the user query.
+            
+            Return ONLY valid JSON with these fields:
+            {
+                "filters": {
+                    "direct_only": false,
+                    "specific_airlines": [],
+                    "max_price": null,
+                    "preferred_times": [],
+                    "exclude_airlines": [],
+                    "max_stops": null,
+                    "preferred_airlines": []
+                },
+                "cabin_class": "ECONOMY"
+            }
+            
+            FILTER DETECTION:
+            - "air india flights only", "only air india" = specific_airlines: ["Air India"]
+            - "indigo flights only", "only indigo" = specific_airlines: ["IndiGo"]
+            - "vistara flights", "only vistara" = specific_airlines: ["Vistara"]
+            - "spicejet only", "only spicejet" = specific_airlines: ["SpiceJet"]
+            - "direct flights only", "direct only", "non-stop only" = direct_only: true
+            - "under 5000", "less than 5000" = max_price: 5000
+            - "morning flights", "early morning" = preferred_times: ["morning"]
+            - "evening flights", "night flights" = preferred_times: ["evening"]
+            - "no air india", "exclude air india" = exclude_airlines: ["Air India"]
+            - "maximum 1 stop", "max 1 stop" = max_stops: 1
+            - "prefer air india", "preferably air india" = preferred_airlines: ["Air India"]
+            
+            CABIN CLASS DETECTION:
+            - "business class", "business" = cabin_class: "BUSINESS"
+            - "economy class", "economy" = cabin_class: "ECONOMY"
+            - "first class", "first" = cabin_class: "FIRST"
+            
+            Return ONLY the JSON, no other text.
+            """
+
+            logger.info(f"🔄 Making OpenAI API call for filter extraction")
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                temperature=0.1,
+                max_tokens=200
+            )
+
+            content = response.choices[0].message.content.strip()
+            logger.info(f"🔄 OpenAI response: {content}")
+            
+            # Clean up response
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.endswith("```"):
+                content = content[:-3]
+
+            result = json.loads(content)
+            logger.info(f"🔄 Extracted filters: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Filter extraction error: {e}")
+            return {}
     
-    def extract_cities_fallback(self, query: str) -> Dict[str, str]:
-        """Fallback city extraction using regex"""
-        city_patterns = {
-            'delhi': 'DEL', 'mumbai': 'BOM', 'bangalore': 'BLR', 'chennai': 'MAA',
-            'kolkata': 'CCU', 'hyderabad': 'HYD', 'pune': 'PNQ', 'ahmedabad': 'AMD',
-            'kochi': 'COK', 'goa': 'GOI', 'jaipur': 'JAI', 'lucknow': 'LKO'
-        }
-        
-        query_lower = query.lower()
-        found_cities = []
-        
-        for city, code in city_patterns.items():
-            if city in query_lower:
-                found_cities.append(code)
-        
-        if len(found_cities) >= 2:
-            return {"origin": found_cities[0], "destination": found_cities[1]}
-        elif len(found_cities) == 1:
-            return {"origin": found_cities[0], "destination": ""}
-        else:
-            return {"origin": "", "destination": ""}
+
 
 class CurrencyConverter:
     """Simple currency converter for EUR to INR"""
@@ -1055,9 +1565,13 @@ class SimpleFlightFormatter:
                 arrival_date = self._safe_extract_date(arrival_at)
                 arrival_time = self._safe_extract_time(arrival_at)
                 
+                # Extract airline name from carrier code
+                airline_name = self._get_airline_name(segment["carrierCode"])
+                
                 flight = {
                     "flight_number": f"{segment['carrierCode']}{segment['number']}",
                     "airline": segment["carrierCode"],
+                    "airline_name": airline_name,
                     "departure_date": departure_date,
                     "departure_time": departure_time,
                     "arrival_date": arrival_date,
@@ -1079,7 +1593,8 @@ class SimpleFlightFormatter:
                     "operating_carrier": operating_carrier,
                     "route": route,
                     "stops": len(itinerary["segments"]) - 1,
-                    "is_direct": len(itinerary["segments"]) == 1
+                    "is_direct": len(itinerary["segments"]) == 1,
+                    "segments": self._format_segments(itinerary["segments"])
                 }
 
                 # Add connecting flights information if there are multiple segments
@@ -1120,3 +1635,125 @@ class SimpleFlightFormatter:
                 continue
 
         return flights
+
+    def _get_airline_name(self, carrier_code: str) -> str:
+        """Get airline name from carrier code"""
+        airline_map = {
+            "AI": "Air India",
+            "6E": "IndiGo",
+            "UK": "Vistara",
+            "SG": "SpiceJet",
+            "G8": "Go First",
+            "9W": "Jet Airways",
+            "I5": "AirAsia India",
+            "QP": "Akasa Air",
+            "EM": "Emirates",
+            "EK": "Emirates",
+            "QR": "Qatar Airways",
+            "TK": "Turkish Airlines",
+            "LH": "Lufthansa",
+            "BA": "British Airways",
+            "AF": "Air France",
+            "KL": "KLM",
+            "DL": "Delta Air Lines",
+            "AA": "American Airlines",
+            "UA": "United Airlines",
+            "CA": "Air China",
+            "MU": "China Eastern",
+            "CZ": "China Southern",
+            "NH": "All Nippon Airways",
+            "JL": "Japan Airlines",
+            "KE": "Korean Air",
+            "OZ": "Asiana Airlines",
+            "TG": "Thai Airways",
+            "SQ": "Singapore Airlines",
+            "MH": "Malaysia Airlines",
+            "GA": "Garuda Indonesia",
+            "PR": "Philippine Airlines",
+            "VN": "Vietnam Airlines",
+            "LA": "LATAM",
+            "JJ": "LATAM Brasil",
+            "AV": "Avianca",
+            "CM": "Copa Airlines",
+            "AM": "Aeromexico",
+            "AC": "Air Canada",
+            "WS": "WestJet",
+            "QZ": "Indonesia AirAsia",
+            "FD": "Thai AirAsia",
+            "AK": "AirAsia",
+            "D7": "AirAsia X",
+            "TR": "Tigerair",
+            "JQ": "Jetstar",
+            "VA": "Virgin Australia",
+            "QF": "Qantas",
+            "NZ": "Air New Zealand",
+            "FJ": "Fiji Airways",
+            "PG": "Bangkok Airways",
+            "VZ": "Thai VietJet Air",
+            "VJ": "VietJet Air",
+            "BL": "Pacific Airlines",
+            "VU": "Vueling",
+            "FR": "Ryanair",
+            "U2": "easyJet",
+            "W6": "Wizz Air",
+            "DY": "Norwegian Air Shuttle",
+            "SK": "SAS",
+            "AY": "Finnair",
+            "LO": "LOT Polish Airlines",
+            "OS": "Austrian Airlines",
+            "LX": "Swiss International Air Lines",
+            "SN": "Brussels Airlines",
+            "TP": "TAP Air Portugal",
+            "IB": "Iberia",
+            "AZ": "ITA Airways",
+            "SU": "Aeroflot",
+            "S7": "S7 Airlines",
+            "U6": "Ural Airlines",
+            "FV": "Rossiya Airlines",
+            "DP": "Pobeda",
+            "UT": "UTair",
+            "N4": "Nordwind Airlines",
+            "7G": "Starflyer"
+        }
+        return airline_map.get(carrier_code, carrier_code)
+
+    def _format_segments(self, segments: List[Dict]) -> List[Dict]:
+        """Format segments for filtering"""
+        formatted_segments = []
+        
+        for segment in segments:
+            try:
+                # Extract airline name
+                airline_name = self._get_airline_name(segment["carrierCode"])
+                
+                # Get departure and arrival times
+                departure_time = self._safe_extract_time(segment["departure"]["at"])
+                arrival_time = self._safe_extract_time(segment["arrival"]["at"])
+                
+                formatted_segment = {
+                    "carrier": {
+                        "code": segment["carrierCode"],
+                        "name": airline_name
+                    },
+                    "departure": {
+                        "airport": segment["departure"]["iataCode"],
+                        "time": departure_time,
+                        "terminal": segment["departure"].get("terminal", "N/A")
+                    },
+                    "arrival": {
+                        "airport": segment["arrival"]["iataCode"],
+                        "time": arrival_time,
+                        "terminal": segment["arrival"].get("terminal", "N/A")
+                    },
+                    "stops": segment.get("numberOfStops", 0),
+                    "duration": segment.get("duration", "N/A"),
+                    "aircraft": segment.get("aircraft", {}).get("code", "N/A")
+                }
+                
+                formatted_segments.append(formatted_segment)
+                
+            except Exception as e:
+                logger.warning(f"Error formatting segment: {e}")
+                continue
+        
+        return formatted_segments

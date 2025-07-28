@@ -57,6 +57,8 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
   const [expandedFlights, setExpandedFlights] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<'price' | 'duration' | 'departure'>('price');
   const [showOnlyDirect, setShowOnlyDirect] = useState(false);
+  const [displayedFlights, setDisplayedFlights] = useState(10); // Show first 10 flights initially
+  const [airlineFilter, setAirlineFilter] = useState(''); // Filter by airline name
 
   // Airline mapping
   const airlineNames: Record<string, string> = {
@@ -67,13 +69,33 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
     'KL': 'KLM', 'TK': 'Turkish Airlines', 'SU': 'Aeroflot'
   };
 
+  // Helper function to parse duration
+  const parseDuration = (duration: string): number => {
+    const match = duration?.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
+    if (!match) return 0;
+    const hours = parseInt(match[1] || '0');
+    const minutes = parseInt(match[2] || '0');
+    return hours * 60 + minutes;
+  };
+
   // Process and sort flights
   const processedFlights = useMemo(() => {
     let flights = [...(flightData || [])];
 
-    // Filter
+    // Filter by direct flights
     if (showOnlyDirect) {
       flights = flights.filter(f => f.is_direct);
+    }
+
+    // Filter by airline name
+    if (airlineFilter.trim()) {
+      const filterLower = airlineFilter.toLowerCase();
+      flights = flights.filter(f => {
+        const airlineName = airlineNames[f.airline] || f.airline;
+        return airlineName.toLowerCase().includes(filterLower) || 
+               f.airline.toLowerCase().includes(filterLower) ||
+               f.flight_number.toLowerCase().includes(filterLower);
+      });
     }
 
     // Sort
@@ -91,15 +113,12 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
     });
 
     return flights;
-  }, [flightData, sortBy, showOnlyDirect]);
+  }, [flightData, sortBy, showOnlyDirect, airlineFilter]);
 
-  const parseDuration = (duration: string): number => {
-    const match = duration?.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
-    if (!match) return 0;
-    const hours = parseInt(match[1] || '0');
-    const minutes = parseInt(match[2] || '0');
-    return hours * 60 + minutes;
-  };
+  // Get flights to display (paginated)
+  const flightsToDisplay = processedFlights.slice(0, displayedFlights);
+  const hasMoreFlights = displayedFlights < processedFlights.length;
+  const totalFlights = processedFlights.length;
 
   const formatDuration = (duration: string): string => {
     const totalMinutes = parseDuration(duration);
@@ -142,10 +161,13 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
     return `${dep.airport} ${dep.time} → ${arr.airport} ${arr.time}`;
   };
 
-  const cheapest = processedFlights[0];
-  const fastest = processedFlights.reduce((fastest, current) => 
+  // Safety checks for empty flight data
+  const hasFlights = processedFlights.length > 0;
+  
+  const cheapest = hasFlights ? processedFlights[0] : null;
+  const fastest = hasFlights ? processedFlights.reduce((fastest, current) => 
     parseDuration(current.duration) < parseDuration(fastest.duration) ? current : fastest
-  );
+  ) : null;
   const formatCurrency = (amount: number): string => new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
@@ -159,7 +181,7 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
             <Plane className="text-blue-500" />
-            {processedFlights.length} Flights Found
+            {hasFlights ? `${totalFlights} Flights Found` : '0 Flights Found'}
           </h1>
           <div className="text-sm text-gray-600 flex items-center gap-2">
             <Calendar size={16} />
@@ -175,10 +197,10 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
               <span className="font-medium">Cheapest</span>
             </div>
             <div className="text-lg font-bold text-green-800">
-              {formatCurrency(cheapest.price_numeric)}
+              {hasFlights && cheapest ? formatCurrency(cheapest.price_numeric) : 'N/A'}
             </div>
             <div className="text-sm text-green-600">
-              {airlineNames[cheapest.airline] || cheapest.airline} {cheapest.flight_number}
+              {hasFlights && cheapest ? `${airlineNames[cheapest.airline] || cheapest.airline} ${cheapest.flight_number}` : 'No flights available'}
             </div>
           </div>
 
@@ -188,10 +210,10 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
               <span className="font-medium">Fastest</span>
             </div>
             <div className="text-lg font-bold text-blue-800">
-              {formatDuration(fastest.duration)}
+              {hasFlights && fastest ? formatDuration(fastest.duration) : 'N/A'}
             </div>
             <div className="text-sm text-blue-600">
-              {airlineNames[fastest.airline] || fastest.airline} {fastest.flight_number}
+              {hasFlights && fastest ? `${airlineNames[fastest.airline] || fastest.airline} ${fastest.flight_number}` : 'No flights available'}
             </div>
           </div>
 
@@ -220,9 +242,27 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
             >
               <option value="price">Sort by Price</option>
               <option value="duration">Sort by Duration</option>
-              <option value="departure">Sort by Departure</option>
             </select>
           </div>
+
+          {/* <div className="flex items-center gap-2">
+            <input 
+              type="text"
+              placeholder="Filter by airline..."
+              value={airlineFilter}
+              onChange={(e) => setAirlineFilter(e.target.value)}
+              className="border rounded px-3 py-1 text-sm w-48"
+            />
+            {airlineFilter && (
+              <button
+                onClick={() => setAirlineFilter('')}
+                className="text-gray-500 hover:text-gray-700 text-sm"
+                title="Clear airline filter"
+              >
+                ✕
+              </button>
+            )}
+          </div> */}
 
           <label className="flex items-center gap-2 text-sm">
             <input 
@@ -234,11 +274,33 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
             Direct flights only
           </label>
         </div>
+
+        {/* Active Filters Summary */}
+        {(showOnlyDirect || airlineFilter) && (
+          <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 mb-4">
+            <div className="text-sm text-blue-800">
+              <span className="font-medium">Active filters:</span>
+              {showOnlyDirect && <span className="ml-2 bg-blue-200 px-2 py-1 rounded">Direct flights only</span>}
+              {airlineFilter && <span className="ml-2 bg-blue-200 px-2 py-1 rounded">Airline: {airlineFilter}</span>}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Flight List */}
       <div className="space-y-4">
-        {processedFlights.map((flight, index) => {
+        {!hasFlights ? (
+          <div className="bg-white rounded-lg shadow-lg border border-gray-200 p-8 text-center">
+            <div className="text-gray-500 mb-4">
+              <Plane className="mx-auto h-12 w-12 text-gray-300" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700 mb-2">Sorry, no flights found</h3>
+            <p className="text-gray-500">
+              {searchInfo?.origin} to {searchInfo?.destination} on {searchInfo?.search_date}
+            </p>
+          </div>
+        ) : (
+          flightsToDisplay.map((flight, index) => {
           const flightKey = `${flight.flight_number}-${index}`;
           const isExpanded = expandedFlights.has(flightKey);
           const airlineName = airlineNames[flight.airline] || flight.airline;
@@ -360,22 +422,48 @@ const EnhancedFlightDisplay: React.FC<EnhancedFlightDisplayProps> = ({ flightDat
               )}
             </div>
           )
-        })}
+        })
+        )}
       </div>
 
+      {/* Show More Button */}
+      {hasMoreFlights && (
+        <div className="flex justify-center mt-6 gap-4">
+          <button
+            onClick={() => setDisplayedFlights(prev => Math.min(prev + 10, totalFlights))}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold flex items-center gap-2"
+          >
+            <ChevronDown size={20} />
+            Show More Flights ({totalFlights - displayedFlights} remaining)
+          </button>
+          
+          {totalFlights > 20 && (
+            <button
+              onClick={() => setDisplayedFlights(totalFlights)}
+              className="bg-gray-600 text-white px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors font-semibold flex items-center gap-2"
+            >
+              <ChevronDown size={20} />
+              Show All Flights
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Summary Footer */}
-      <div className="bg-white rounded-lg shadow-lg p-6">
-        <div className="text-center text-gray-600">
-          {/* ✅ Construct message from available data */}
-          Showing {processedFlights.length} cheapest flights
-          {/* Check if it's a month search by looking at flight dates */}
-        {processedFlights.length > 0 && new Set(processedFlights.map(f => f.departure_date)).size > 1 
-          ? ' across multiple dates' 
-          : ''
-        } •           
-        Prices from {formatCurrency(Math.min(...processedFlights.map(f => f.price_numeric)))} to {formatCurrency(Math.max(...processedFlights.map(f => f.price_numeric)))}
-          </div>
-      </div>
+      {hasFlights && (
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <div className="text-center text-gray-600">
+            {/* ✅ Construct message from available data */}
+            Showing {flightsToDisplay.length} of {totalFlights} flights
+            {/* Check if it's a month search by looking at flight dates */}
+          {processedFlights.length > 0 && new Set(processedFlights.map(f => f.departure_date)).size > 1 
+            ? ' across multiple dates' 
+            : ''
+          } •           
+          Prices from {formatCurrency(Math.min(...processedFlights.map(f => f.price_numeric)))} to {formatCurrency(Math.max(...processedFlights.map(f => f.price_numeric)))}
+            </div>
+        </div>
+      )}
     </div>
   );
 };

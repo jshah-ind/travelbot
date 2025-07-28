@@ -74,6 +74,7 @@ class ChatSessionResponse(ChatSessionBase):
     updated_at: Optional[datetime] = None
     is_active: bool
     total_messages: int
+    message_text: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -118,6 +119,7 @@ class ChatMessageResponse(ChatMessageBase):
     is_edited: bool
     response_data: Optional[Dict[str, Any]] = None
     processing_time: Optional[int] = None
+    message_text: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
 

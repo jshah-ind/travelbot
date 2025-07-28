@@ -33,7 +33,16 @@ export const apiClient = {
     console.log(`🔍 API: Request headers:`, config.headers);
 
     try {
-      const response = await fetch(url, config);
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 180000); // 180 seconds timeout
+      
+      const response = await fetch(url, {
+        ...config,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
       console.log(`🔍 API: Response status: ${response.status}, ok: ${response.ok}`);
 
       // Handle 401 Unauthorized - try to refresh token
@@ -102,6 +111,12 @@ export const apiClient = {
       return responseData;
     } catch (error) {
       console.error('🔍 API: Request failed with error:', error);
+      
+      // Handle timeout specifically
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout after 180 seconds. Please try again in a moment.');
+      }
+      
       throw error;
     }
   },

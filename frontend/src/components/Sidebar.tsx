@@ -61,9 +61,11 @@ const Sidebar: React.FC = () => {
   // Handle loading a chat session
   const handleLoadSession = async (sessionId: string) => {
     try {
+      console.log('🔄 Sidebar: Loading session:', sessionId);
       await loadSession(sessionId);
+      console.log('✅ Sidebar: Session loaded successfully');
     } catch (error) {
-      console.error('Failed to load session:', error);
+      console.error('❌ Sidebar: Failed to load session:', error);
     }
   };
 

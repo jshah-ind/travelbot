@@ -5,6 +5,7 @@ import { useChatWithAuth } from '../hooks/useChatWithAuth';
 import EnhancedFlightDisplay from './EnhancedFlightDisplay';
 import { MonthSearchConfirmation } from './MonthSearchConfirmation';
 import { MonthSearchProgress } from './MonthSearchProgress';
+import LoadingIndicator from './LoadingIndicator';
 
 const ChatInterface: React.FC = () => {
   const {
@@ -194,6 +195,7 @@ const ChatInterface: React.FC = () => {
   };
 
   const renderMessage = (message: any) => {
+    console.log('🎯 renderMessage called for:', message.id, 'sender:', message.sender, 'content:', message.content?.substring(0, 50));
     const isUser = message.sender === 'user';
 
     return (
@@ -225,15 +227,11 @@ const ChatInterface: React.FC = () => {
                 <>
                   {/* Bot message content */}
                   {(() => {
+                    // Debug logging for message rendering
                     console.log('🎯 Rendering message:', message.id, 'at', new Date().toISOString());
-                    console.log('🎯 Message object keys:', Object.keys(message));
+                    console.log('🎯 Message content:', message.content);
                     console.log('🎯 Message flights:', message.flights);
-                    console.log('🎯 Message flights type:', typeof message.flights);
-                    console.log('🎯 Message flights length:', message.flights?.length);
                     console.log('🎯 Message data:', message.data);
-                    console.log('🎯 Message data flights:', message.data?.flights);
-                    console.log('🎯 Has flights?', message.flights && message.flights.length > 0);
-                    console.log('🎯 Has data flights?', message.data?.flights && message.data.flights.length > 0);
                     return null;
                   })()}
                   {((message.flights && message.flights.length > 0) || (message.data?.flights && message.data.flights.length > 0)) ? (
@@ -277,7 +275,9 @@ const ChatInterface: React.FC = () => {
 
           {/* Timestamp */}
           <div className={`text-xs text-gray-500 mt-1 ${isUser ? 'text-right' : 'text-left'}`}>
-            {message.timestamp.toLocaleTimeString()}
+            {message.timestamp instanceof Date && !isNaN(message.timestamp)
+              ? message.timestamp.toLocaleTimeString()
+              : ''}
           </div>
         </div>
       </div>
@@ -294,23 +294,19 @@ const ChatInterface: React.FC = () => {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {(() => {
+          console.log('🎯 Rendering messages array:', messages);
+          console.log('🎯 Messages array length:', messages.length);
+          console.log('🎯 Messages structure:', messages.map(m => ({ id: m.id, sender: m.sender, content: m.content?.substring(0, 30) })));
+          return null;
+        })()}
         {messages.map(renderMessage)}
         
-        {isLoading && (
-          <div className="flex justify-start mb-6">
-            <div className="flex items-start space-x-3">
-              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-4 h-4 text-gray-600" />
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
-                <div className="flex items-center gap-2 text-gray-600">
-                  <Loader className="animate-spin" size={16} />
-                  <span className="text-sm">Thinking...</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <LoadingIndicator 
+          isLoading={isLoading} 
+          message="Processing your request... (This may take up to 3 minutes for complex searches)"
+          showTimeoutWarning={true}
+        />
         
         <div ref={messagesEndRef} />
       </div>

@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 from simple_utils import SimpleOpenAIHandler, SimpleFlightFormatter, SimpleDateParser
 from auth_routes import router as auth_router
+from chat_routes import router as chat_router
 from auth_utils import get_current_user, get_current_user_optional
 from auth_models import User
 from database import get_db, create_tables
@@ -36,6 +37,9 @@ app = FastAPI(title="Simple Travel Agent", version="1.0.0")
 
 # Include authentication routes
 app.include_router(auth_router)
+
+# Include chat history routes
+app.include_router(chat_router)
 
 # Mount static files for frontend
 if os.path.exists("frontend"):
@@ -77,27 +81,32 @@ class SimpleTravelAgent:
         self.formatter = flight_formatter
 
     async def search_flights(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Search flights using Amadeus API"""
+        """Search flights using Amadeus API with advanced filtering"""
         try:
             # Extract search parameters
             origin = params.get("origin")
             destination = params.get("destination")
             departure_date = params.get("departure_date")
+            date_range_end = params.get("date_range_end")  # New parameter for date ranges
             passengers = params.get("passengers", 1)
             cabin_class = params.get("cabin_class", "ECONOMY")
+            filters = params.get("filters", {})
 
             logger.info(f"🛫 Searching flights: {params}")
 
-            # Search flights using Amadeus
-            logger.info(f"🔍 Amadeus API call with cabin_class: {cabin_class}")
-            response = self.amadeus.shopping.flight_offers_search.get(
-                originLocationCode=origin,
-                destinationLocationCode=destination,
-                departureDate=departure_date,
-                adults=passengers,
-                travelClass=cabin_class,
-                max=10
-            )
+            # Check if this is a date range search
+            if date_range_end:
+                logger.info(f"🔍 Date range search: {departure_date} to {date_range_end}")
+                return await self._search_flights_date_range(
+                    origin, destination, departure_date, date_range_end, 
+                    passengers, cabin_class, filters
+                )
+            else:
+                # Single date search
+                logger.info(f"🔍 Single date search: {departure_date}")
+                return await self._search_flights_single_date(
+                    origin, destination, departure_date, passengers, cabin_class, filters
+                )
 
             if not response.data:
                 return {
@@ -110,22 +119,28 @@ class SimpleTravelAgent:
             # Format flights with currency conversion and cabin class filtering
             formatted_flights = self.formatter.format_amadeus_response(response.data, cabin_class)
 
+            # Apply advanced filters
+            filtered_flights = self._apply_advanced_filters(formatted_flights, filters)
+            
             # Debug: Check what cabin classes were returned
             cabin_classes_returned = set()
             for flight in formatted_flights:
                 cabin_classes_returned.add(flight.get("cabin_class", "UNKNOWN"))
             logger.info(f"🔍 Cabin classes returned by Amadeus: {cabin_classes_returned}")
+            logger.info(f"🔍 Applied filters: {filters}")
+            logger.info(f"🔍 Flights after filtering: {len(filtered_flights)} out of {len(formatted_flights)}")
 
             # Sort by price (ascending)
-            formatted_flights.sort(key=lambda x: x.get("price_numeric", float('inf')))
+            filtered_flights.sort(key=lambda x: x.get("price_numeric", float('inf')))
 
-            logger.info(f"✅ Found {len(formatted_flights)} flights")
+            logger.info(f"✅ Found {len(filtered_flights)} flights after filtering")
 
             return {
                 "status": "success",
-                "message": f"Found {len(formatted_flights)} flights from {origin} to {destination}",
-                "flights": formatted_flights,
-                "search_info": params
+                "message": f"Found {len(filtered_flights)} flights from {origin} to {destination}",
+                "flights": filtered_flights,
+                "search_info": params,
+                "filters_applied": filters
             }
 
         except Exception as e:
@@ -136,6 +151,266 @@ class SimpleTravelAgent:
                 "flights": [],
                 "search_info": params
             }
+
+    async def _search_flights_single_date(self, origin: str, destination: str, departure_date: str, 
+                                         passengers: int, cabin_class: str, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Search flights for a single date"""
+        try:
+            logger.info(f"🔍 Amadeus API call for single date: {departure_date}")
+            response = self.amadeus.shopping.flight_offers_search.get(
+                originLocationCode=origin,
+                destinationLocationCode=destination,
+                departureDate=departure_date,
+                adults=passengers,
+                travelClass=cabin_class,
+                max=50
+            )
+
+            if not response.data:
+                return {
+                    "status": "error",
+                    "message": f"No flights found from {origin} to {destination} on {departure_date}",
+                    "flights": [],
+                    "search_info": {"origin": origin, "destination": destination, "departure_date": departure_date}
+                }
+
+            # Format and filter flights
+            formatted_flights = self.formatter.format_amadeus_response(response.data, cabin_class)
+            filtered_flights = self._apply_advanced_filters(formatted_flights, filters)
+            filtered_flights.sort(key=lambda x: x.get("price_numeric", float('inf')))
+
+            logger.info(f"✅ Found {len(filtered_flights)} flights for {departure_date}")
+
+            return {
+                "status": "success",
+                "message": f"Found {len(filtered_flights)} flights from {origin} to {destination} on {departure_date}",
+                "flights": filtered_flights,
+                "search_info": {"origin": origin, "destination": destination, "departure_date": departure_date},
+                "filters_applied": filters
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Single date search error: {e}")
+            return {
+                "status": "error",
+                "message": f"Flight search failed: {str(e)}",
+                "flights": [],
+                "search_info": {"origin": origin, "destination": destination, "departure_date": departure_date}
+            }
+
+    async def _search_flights_date_range(self, origin: str, destination: str, start_date: str, end_date: str,
+                                       passengers: int, cabin_class: str, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Search flights across a date range"""
+        try:
+            from datetime import datetime, timedelta
+            
+            # Convert dates to datetime objects
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            
+            # Generate list of dates in range
+            date_list = []
+            current_dt = start_dt
+            while current_dt <= end_dt:
+                date_list.append(current_dt.strftime("%Y-%m-%d"))
+                current_dt += timedelta(days=1)
+            
+            logger.info(f"🔍 Searching {len(date_list)} dates: {start_date} to {end_date}")
+            
+            all_flights = []
+            successful_dates = []
+            
+            # Search for each date in the range
+            for date in date_list:
+                try:
+                    logger.info(f"🔍 Searching flights for {date}")
+                    response = self.amadeus.shopping.flight_offers_search.get(
+                        originLocationCode=origin,
+                        destinationLocationCode=destination,
+                        departureDate=date,
+                        adults=passengers,
+                        travelClass=cabin_class,
+                        max=20  # Reduced per date to avoid overwhelming results
+                    )
+                    
+                    if response.data:
+                        # Format flights and add date information
+                        formatted_flights = self.formatter.format_amadeus_response(response.data, cabin_class)
+                        
+                        # Add search date to each flight
+                        for flight in formatted_flights:
+                            flight["search_date"] = date
+                        
+                        all_flights.extend(formatted_flights)
+                        successful_dates.append(date)
+                        logger.info(f"✅ Found {len(formatted_flights)} flights for {date}")
+                    else:
+                        logger.info(f"⚠️ No flights found for {date}")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Error searching for {date}: {e}")
+                    continue
+            
+            if not all_flights:
+                return {
+                    "status": "error",
+                    "message": f"No flights found from {origin} to {destination} between {start_date} and {end_date}",
+                    "flights": [],
+                    "search_info": {"origin": origin, "destination": destination, "date_range": f"{start_date} to {end_date}"}
+                }
+            
+            # Apply advanced filters to all flights
+            filtered_flights = self._apply_advanced_filters(all_flights, filters)
+            
+            # Sort by date first, then by price
+            filtered_flights.sort(key=lambda x: (x.get("search_date", ""), x.get("price_numeric", float('inf'))))
+            
+            logger.info(f"✅ Found {len(filtered_flights)} flights across {len(successful_dates)} dates")
+
+            return {
+                "status": "success",
+                "message": f"Found {len(filtered_flights)} flights from {origin} to {destination} between {start_date} and {end_date}",
+                "flights": filtered_flights,
+                "search_info": {"origin": origin, "destination": destination, "date_range": f"{start_date} to {end_date}"},
+                "filters_applied": filters,
+                "dates_searched": successful_dates
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Date range search error: {e}")
+            return {
+                "status": "error",
+                "message": f"Date range search failed: {str(e)}",
+                "flights": [],
+                "search_info": {"origin": origin, "destination": destination, "date_range": f"{start_date} to {end_date}"}
+            }
+
+    def _apply_advanced_filters(self, flights: List[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply advanced filters to flight results"""
+        filtered_flights = flights.copy()
+        
+        # Direct flights only filter
+        if filters.get("direct_only", False):
+            filtered_flights = [f for f in filtered_flights if self._is_direct_flight(f)]
+            logger.info(f"🔍 Applied direct flights filter: {len(filtered_flights)} flights remaining")
+        
+        # Specific airlines filter
+        specific_airlines = filters.get("specific_airlines", [])
+        if specific_airlines:
+            filtered_flights = [f for f in filtered_flights if self._matches_airline(f, specific_airlines)]
+            logger.info(f"🔍 Applied specific airlines filter ({specific_airlines}): {len(filtered_flights)} flights remaining")
+        
+        # Exclude airlines filter
+        exclude_airlines = filters.get("exclude_airlines", [])
+        if exclude_airlines:
+            filtered_flights = [f for f in filtered_flights if not self._matches_airline(f, exclude_airlines)]
+            logger.info(f"🔍 Applied exclude airlines filter ({exclude_airlines}): {len(filtered_flights)} flights remaining")
+        
+        # Max price filter
+        max_price = filters.get("max_price")
+        if max_price:
+            filtered_flights = [f for f in filtered_flights if f.get("price_numeric", float('inf')) <= max_price]
+            logger.info(f"🔍 Applied max price filter (₹{max_price}): {len(filtered_flights)} flights remaining")
+        
+        # Preferred times filter
+        preferred_times = filters.get("preferred_times", [])
+        if preferred_times:
+            filtered_flights = [f for f in filtered_flights if self._matches_time_preference(f, preferred_times)]
+            logger.info(f"🔍 Applied time preference filter ({preferred_times}): {len(filtered_flights)} flights remaining")
+        
+        # Max stops filter
+        max_stops = filters.get("max_stops")
+        if max_stops is not None:
+            filtered_flights = [f for f in filtered_flights if self._get_stop_count(f) <= max_stops]
+            logger.info(f"🔍 Applied max stops filter ({max_stops}): {len(filtered_flights)} flights remaining")
+        
+        # Preferred airlines (sort by preference, don't filter out)
+        preferred_airlines = filters.get("preferred_airlines", [])
+        if preferred_airlines:
+            filtered_flights.sort(key=lambda f: (0 if self._matches_airline(f, preferred_airlines) else 1, f.get("price_numeric", float('inf'))))
+            logger.info(f"🔍 Applied preferred airlines sorting ({preferred_airlines})")
+        
+        return filtered_flights
+
+    def _is_direct_flight(self, flight: Dict[str, Any]) -> bool:
+        """Check if flight is direct (no stops)"""
+        # Use the is_direct field if available
+        if "is_direct" in flight:
+            return flight.get("is_direct", False)
+        
+        # Fallback to segment-based calculation
+        segments = flight.get("segments", [])
+        if not segments:
+            return True
+        
+        # If there's only one segment, it's direct
+        if len(segments) == 1:
+            return True
+        
+        # If there are multiple segments, it's not direct (connecting flight)
+        if len(segments) > 1:
+            return False
+        
+        # Check if the single segment has stops
+        if segments[0].get("stops", 0) > 0:
+            return False
+        
+        return True
+
+    def _matches_airline(self, flight: Dict[str, Any], airlines: List[str]) -> bool:
+        """Check if flight matches any of the specified airlines (primary carrier only)"""
+        segments = flight.get("segments", [])
+        if not segments:
+            return False
+        
+        # Only check the primary carrier (first segment) for specific airline filters
+        primary_carrier = segments[0].get("carrier", {}).get("name", "")
+        if not primary_carrier:
+            return False
+        
+        # Check if the primary carrier matches any of the specified airlines
+        for airline in airlines:
+            if airline.lower() == primary_carrier.lower():
+                return True
+        
+        return False
+
+    def _get_stop_count(self, flight: Dict[str, Any]) -> int:
+        """Get the total number of stops for a flight"""
+        segments = flight.get("segments", [])
+        total_stops = 0
+        
+        for segment in segments:
+            total_stops += segment.get("stops", 0)
+        
+        return total_stops
+
+    def _matches_time_preference(self, flight: Dict[str, Any], time_preferences: List[str]) -> bool:
+        """Check if flight departure time matches time preferences"""
+        segments = flight.get("segments", [])
+        if not segments:
+            return False
+        
+        # Get departure time from first segment
+        departure_time = segments[0].get("departure", {}).get("time", "")
+        if not departure_time:
+            return False
+        
+        try:
+            # Parse time (assuming format like "10:30")
+            hour = int(departure_time.split(":")[0])
+            
+            for preference in time_preferences:
+                if preference == "morning" and 6 <= hour < 12:
+                    return True
+                elif preference == "afternoon" and 12 <= hour < 18:
+                    return True
+                elif preference == "evening" and (18 <= hour < 24 or 0 <= hour < 6):
+                    return True
+            
+            return False
+        except:
+            return False
 
 # Initialize travel agent
 travel_agent = SimpleTravelAgent()
@@ -321,6 +596,23 @@ async def search_flights(
         # Use authenticated user ID (authentication is now required)
         user_id = str(current_user.id)
 
+        # 🔄 NEW: Check if this is a reset query to clear conversation context
+        if openai_handler.conversation_memory.is_reset_query(request.query):
+            logger.info(f"🔄 Reset query detected for user {user_id}")
+            
+            # Clear conversation context
+            success = openai_handler.conversation_memory.clear_conversation_context(user_id, db)
+            
+            if success:
+                return {
+                    "status": "success",
+                    "message": "✅ Conversation context cleared! You can now start a new search.",
+                    "flights": [],
+                    "search_info": {"reset": True, "message": "Conversation context cleared"}
+                }
+            else:
+                logger.warning(f"⚠️ Failed to clear conversation context for user {user_id}")
+
         # Extract flight parameters using OpenAI with spelling mistake handling
         try:
             logger.info("🤖 Using OpenAI for intelligent parameter extraction with spelling correction")
@@ -415,6 +707,113 @@ async def health_check():
         "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
         "amadeus_configured": bool(os.getenv("AMADEUS_API_KEY"))
     }
+
+@app.post("/reset-conversation")
+async def reset_conversation(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Explicitly clear conversation context for the current user
+    This stops follow-up questions and starts a fresh conversation
+    """
+    try:
+        user_id = str(current_user.id)
+        logger.info(f"🔄 Explicit conversation reset requested for user: {current_user.email}")
+        
+        # Clear conversation context
+        success = openai_handler.conversation_memory.clear_conversation_context(user_id, db)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "✅ Conversation context cleared successfully! You can now start a new search.",
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to clear conversation context"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Reset conversation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/conversation-status")
+async def get_conversation_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Check if user has active conversation context
+    """
+    try:
+        user_id = str(current_user.id)
+        
+        # Get last conversation context
+        last_context = openai_handler.conversation_memory.get_last_flight_search(user_id, db)
+        
+        if last_context:
+            return {
+                "has_context": True,
+                "last_search": {
+                    "origin": last_context.get("origin"),
+                    "destination": last_context.get("destination"),
+                    "departure_date": last_context.get("departure_date"),
+                    "cabin_class": last_context.get("cabin_class"),
+                    "passengers": last_context.get("passengers")
+                },
+                "message": "You have an active conversation context. Use 'reset' or 'new search' to clear it."
+            }
+        else:
+            return {
+                "has_context": False,
+                "message": "No active conversation context. You can start a new search."
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Conversation status error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/new-session")
+async def start_new_session(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Start a new session by clearing conversation context
+    This is equivalent to reset-conversation but with different semantics
+    """
+    try:
+        user_id = str(current_user.id)
+        logger.info(f"🆕 New session requested for user: {current_user.email}")
+        
+        # Clear conversation context
+        success = openai_handler.conversation_memory.clear_conversation_context(user_id, db)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "🆕 New session started! Previous conversation context cleared.",
+                "user_id": user_id,
+                "session_started": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to start new session"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ New session error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
