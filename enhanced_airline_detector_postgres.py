@@ -7,6 +7,8 @@ from typing import Dict, List, Set, Optional
 from datetime import datetime
 import os
 from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+load_dotenv()
 
 class EnhancedAirlineDetectorPostgres:
     """Enhanced airline detection that learns from Amadeus API responses and stores in PostgreSQL"""
@@ -14,11 +16,11 @@ class EnhancedAirlineDetectorPostgres:
     def __init__(self, db_config: Dict[str, str] = None):
         # Default PostgreSQL configuration
         self.db_config = db_config or {
-            'host': 'localhost',
-            'port': '5432',
-            'database': 'travelagent',
-            'user': 'postgres',
-            'password': 'password'
+            'host':os.getenv('DB_HOST'),
+            'port': os.getenv('DB_PORT'),
+            'database':  os.getenv('DB_NAME'),
+            'user': os.getenv('DB_USER'),
+            'password': os.getenv('DB_PASSWORD')
         }
         self.init_database()
         

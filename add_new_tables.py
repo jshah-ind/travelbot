@@ -25,11 +25,11 @@ class AddNewTables:
     def __init__(self):
         # Database configuration from environment variables
         self.db_config = {
-            'host': os.getenv('DB_HOST', '104.225.217.245'),
-            'port': os.getenv('DB_PORT', '5432'),
-            'database': os.getenv('DB_NAME', 'travelagent'),
-            'user': os.getenv('DB_USER', 'postgres'),
-            'password': os.getenv('DB_PASSWORD', 'abc123!')
+            'host':os.getenv('DB_HOST'),
+            'port': os.getenv('DB_PORT'),
+            'database':  os.getenv('DB_NAME'),
+            'user': os.getenv('DB_USER'),
+            'password': os.getenv('DB_PASSWORD')
         }
         print(self.db_config)
         
